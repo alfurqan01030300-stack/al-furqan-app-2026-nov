@@ -1,0 +1,254 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isDocOwnerCreate(docId) {
+      return isSignedIn() && isValidId(docId) && incoming().ownerUid == request.auth.uid;
+    }
+
+    function isDocOwnerUpdate(docId) {
+      return isSignedIn()
+        && isValidId(docId)
+        && existing().ownerUid == request.auth.uid
+        && incoming().ownerUid == request.auth.uid;
+    }
+
+    function isDocOwnerExisting(docId) {
+      return isSignedIn() && isValidId(docId) && existing().ownerUid == request.auth.uid;
+    }
+
+    function isDocOwnerList() {
+      return isSignedIn() && resource.data.ownerUid == request.auth.uid;
+    }
+
+    // Top-level academy collections requested: students, parents, teachers, attendance, payments, certificates
+    match /students/{studentId} {
+      allow get, list: if true;
+      allow delete: if isDocOwnerExisting(studentId);
+      allow create: if isValidId(studentId)
+        && (isDocOwnerCreate(studentId) || (incoming().registeredBySelf == true && incoming().name is string && incoming().phone is string));
+      allow update: if isDocOwnerUpdate(studentId) || (isSignedIn() && isValidId(studentId));
+    }
+
+    match /parents/{parentId} {
+      allow get, list: if true;
+      allow delete: if isDocOwnerExisting(parentId);
+      allow create: if isDocOwnerCreate(parentId);
+      allow update: if isDocOwnerUpdate(parentId);
+    }
+
+    match /teachers/{teacherId} {
+      allow get, list: if true;
+      allow create: if isValidId(teacherId)
+        && incoming().role == 'teacher'
+        && incoming().name is string
+        && incoming().phone is string;
+      allow update: if isValidId(teacherId)
+        && (isSignedIn() || (existing().role == 'teacher' && incoming().role == 'teacher'));
+      allow delete: if isSignedIn();
+    }
+
+    match /attendance/{attendanceId} {
+      allow list: if isDocOwnerList();
+      allow get, delete: if isDocOwnerExisting(attendanceId);
+      allow create: if isDocOwnerCreate(attendanceId);
+      allow update: if isDocOwnerUpdate(attendanceId);
+    }
+
+    match /payments/{paymentId} {
+      allow list: if isDocOwnerList();
+      allow get, delete: if isDocOwnerExisting(paymentId);
+      allow create: if isDocOwnerCreate(paymentId);
+      allow update: if isDocOwnerUpdate(paymentId);
+    }
+
+    match /certificates/{certificateId} {
+      allow list: if isDocOwnerList();
+      allow get, delete: if isDocOwnerExisting(certificateId);
+      allow create: if isDocOwnerCreate(certificateId);
+      allow update: if isDocOwnerUpdate(certificateId);
+    }
+
+    match /schedules/{scheduleId} {
+      allow list: if isDocOwnerList();
+      allow get, delete: if isDocOwnerExisting(scheduleId);
+      allow create: if isDocOwnerCreate(scheduleId);
+      allow update: if isDocOwnerUpdate(scheduleId);
+    }
+
+    match /halaqat/{halaqaId} {
+      allow list: if isDocOwnerList();
+      allow get, delete: if isDocOwnerExisting(halaqaId);
+      allow create: if isDocOwnerCreate(halaqaId);
+      allow update: if isDocOwnerUpdate(halaqaId);
+    }
+
+    function isValidExam(data) {
+      return data.keys().hasAll(['ownerUid', 'title', 'subject', 'examDate', 'maxScore', 'teacherId', 'teacherName', 'grades', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerUid', 'title', 'subject', 'examDate', 'maxScore', 'teacherId', 'teacherName', 'halaqaId', 'halaqaName', 'description', 'grades', 'createdAt', 'updatedAt'])
+        && data.ownerUid is string && data.ownerUid.size() > 0 && data.ownerUid.size() <= 128
+        && data.title is string && data.title.size() > 0 && data.title.size() <= 160
+        && data.subject is string && data.subject.size() <= 100
+        && data.examDate is string && data.examDate.size() <= 32
+        && data.maxScore is number && data.maxScore > 0 && data.maxScore <= 1000
+        && data.teacherId is string && data.teacherId.size() > 0 && data.teacherId.size() <= 128
+        && data.teacherName is string && data.teacherName.size() <= 160
+        && data.grades is list && data.grades.size() <= 500
+        && data.createdAt is number
+        && data.updatedAt is number;
+    }
+
+    match /exams/{examId} {
+      allow get, list: if true;
+      allow create: if isValidId(examId) && isValidExam(incoming());
+      allow update: if isValidId(examId)
+        && isValidExam(incoming())
+        && incoming().teacherId == existing().teacherId
+        && incoming().createdAt == existing().createdAt
+        && (isSignedIn() || existing().ownerUid == incoming().ownerUid);
+      allow delete: if isSignedIn() && isValidId(examId);
+    }
+
+    function isValidHomework(data) {
+      return data.keys().hasAll(['ownerUid', 'teacherId', 'teacherName', 'subject', 'title', 'dueDate', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerUid', 'teacherId', 'teacherName', 'subject', 'educationSystem', 'stage', 'gradeLevel', 'title', 'description', 'dueDate', 'createdAt', 'updatedAt'])
+        && data.ownerUid is string && data.ownerUid.size() > 0 && data.ownerUid.size() <= 128
+        && data.teacherId is string && data.teacherId.size() > 0 && data.teacherId.size() <= 128
+        && data.teacherName is string && data.teacherName.size() <= 160
+        && data.subject is string && data.subject.size() <= 100
+        && data.title is string && data.title.size() > 0 && data.title.size() <= 200
+        && data.dueDate is string && data.dueDate.size() <= 32
+        && data.createdAt is number
+        && data.updatedAt is number;
+    }
+
+    match /homeworks/{homeworkId} {
+      allow get, list: if true;
+      allow create: if isValidId(homeworkId) && isValidHomework(incoming());
+      allow update: if isValidId(homeworkId)
+        && isValidHomework(incoming())
+        && incoming().teacherId == existing().teacherId
+        && incoming().createdAt == existing().createdAt;
+      allow delete: if isValidId(homeworkId) && (isSignedIn() || existing().ownerUid == 'academy_shared');
+    }
+
+    match /trialLessons/{lessonId} {
+      allow list: if isDocOwnerList();
+      allow get, delete: if isDocOwnerExisting(lessonId);
+      allow create: if isDocOwnerCreate(lessonId);
+      allow update: if isDocOwnerUpdate(lessonId);
+    }
+
+    match /teacherRatings/{ratingId} {
+      allow list: if isDocOwnerList();
+      allow get, delete: if isDocOwnerExisting(ratingId);
+      allow create: if isDocOwnerCreate(ratingId);
+      allow update: if isDocOwnerUpdate(ratingId);
+    }
+
+    match /trash/{trashId} {
+      allow list: if isDocOwnerList();
+      allow get, delete: if isDocOwnerExisting(trashId);
+      allow create: if isDocOwnerCreate(trashId);
+      allow update: if isDocOwnerUpdate(trashId);
+    }
+
+    match /settings/{settingId} {
+      allow list: if isDocOwnerList();
+      allow get, delete: if isDocOwnerExisting(settingId);
+      allow create: if isDocOwnerCreate(settingId);
+      allow update: if isDocOwnerUpdate(settingId);
+    }
+
+    // Legacy per-user subcollections (preserved for backward compatibility and seamless migration)
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+
+      match /students/{studentId} {
+        allow list: if isOwner(userId);
+        allow get, create, update, delete: if isOwner(userId) && isValidId(studentId);
+      }
+
+      match /teachers/{teacherId} {
+        allow list: if isOwner(userId);
+        allow get, create, update, delete: if isOwner(userId) && isValidId(teacherId);
+      }
+
+      match /schedules/{scheduleId} {
+        allow list: if isOwner(userId);
+        allow get, create, update, delete: if isOwner(userId) && isValidId(scheduleId);
+      }
+
+      match /attendance/{attendanceId} {
+        allow list: if isOwner(userId);
+        allow get, create, update, delete: if isOwner(userId) && isValidId(attendanceId);
+      }
+
+      match /payments/{paymentId} {
+        allow list: if isOwner(userId);
+        allow get, create, update, delete: if isOwner(userId) && isValidId(paymentId);
+      }
+
+      match /teacherRatings/{ratingId} {
+        allow list: if isOwner(userId);
+        allow get, create, update, delete: if isOwner(userId) && isValidId(ratingId);
+      }
+
+      match /trialLessons/{lessonId} {
+        allow list: if isOwner(userId);
+        allow get, create, update, delete: if isOwner(userId) && isValidId(lessonId);
+      }
+
+      match /settings/{settingId} {
+        allow list: if isOwner(userId);
+        allow get, create, update, delete: if isOwner(userId) && isValidId(settingId);
+      }
+
+      match /trash/{trashId} {
+        allow list: if isOwner(userId);
+        allow get, create, update, delete: if isOwner(userId) && isValidId(trashId);
+      }
+    }
+
+    // Publicly readable login page configuration (only authenticated admins can update)
+    match /publicConfig/{docId} {
+      allow read: if true;
+      allow write: if isSignedIn();
+    }
+
+    // Read-only parent follow-up snapshots keyed by child ID or normalized parent phone token
+    match /publicParentLinks/{linkId} {
+      allow read: if true;
+      allow write: if isSignedIn();
+    }
+
+    match /test/{docId} {
+      allow read: if true;
+    }
+  }
+}
