@@ -255,6 +255,8 @@ export interface AcademySettings {
   managerPin?: string;      // الرقم السري الخاص بمدير الأكاديمية
   managerPinConfigured?: boolean; // هل قام المدير بإنشاء رقم سري لأول مرة؟
   slogan?: string;
+  previewDescription?: string; // وصف معاينة الرابط في واتساب وفيسبوك
+  previewUpdatedAt?: number;   // توقيت آخر تحديث لبيانات المعاينة (لكسر الكاش)
   email?: string;
   address?: string;
   currency?: string;        // العملة الافتراضية (ج.م / ر.س)
@@ -333,4 +335,3 @@ export interface FirebaseConnectionStats {
   lastCheckedAt: number | null;
   reason?: string;
 }
-

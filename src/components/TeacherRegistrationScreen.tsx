@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowRight,
+  CheckCircle2,
   Clock,
   GraduationCap,
   MapPin,
@@ -49,7 +50,7 @@ interface TeacherRegistrationScreenProps {
   prefillPhone?: string;
   onSubmitRegistration: (
     payload: TeacherSelfRegistrationPayload
-  ) => Promise<{ ok: boolean; alreadyExists?: boolean; error?: string }>;
+  ) => Promise<{ ok: boolean; alreadyExists?: boolean; pendingApproval?: boolean; error?: string }>;
   onCheckPhoneExists: (normalizedPhone: string) => Promise<boolean>;
   onRedirectToLoginWithNotice: (phone: string, notice: string) => void;
   onBackToLogin: () => void;
@@ -92,6 +93,7 @@ export const TeacherRegistrationScreen: React.FC<TeacherRegistrationScreenProps>
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [duplicateNotice, setDuplicateNotice] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [submittedPending, setSubmittedPending] = useState(false);
 
   const avatarInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -277,13 +279,48 @@ export const TeacherRegistrationScreen: React.FC<TeacherRegistrationScreenProps>
           return;
         }
         setErrorMsg(res.error || 'تعذر حفظ البيانات، يرجى المحاولة مرة أخرى.');
+        return;
       }
-    } catch {
-      setErrorMsg('حدث خطأ أثناء حفظ البيانات. حاول مرة أخرى.');
+
+      if (res.pendingApproval !== false) {
+        setSubmittedPending(true);
+      }
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'حدث خطأ أثناء حفظ البيانات. حاول مرة أخرى.');
     } finally {
       setSubmitting(false);
     }
   };
+
+  if (submittedPending) {
+    return (
+      <div
+        dir="rtl"
+        className="flex-1 w-full max-w-full overflow-x-hidden furqan-shell-bg py-8 px-4 flex items-center justify-center font-cairo"
+      >
+        <div className="w-full max-w-md furqan-card rounded-3xl p-6 sm:p-8 shadow-2xl text-center space-y-5">
+          <div className="w-16 h-16 rounded-2xl bg-emerald-100 border-2 border-[#0a4d2e] text-[#0a4d2e] flex items-center justify-center mx-auto shadow">
+            <CheckCircle2 className="w-9 h-9" />
+          </div>
+          <div className="space-y-2">
+            <h2 className="text-xl sm:text-2xl font-extrabold text-[#0a4d2e]">
+              تم ارسال طلبك للمدير، استنى الموافقة
+            </h2>
+            <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
+              تم إرسال بياناتك إلى إدارة الأكاديمية للمراجعة. فور موافقة المدير يمكنك الدخول مباشرة برقم هاتفك ({phone}).
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onBackToLogin}
+            className="w-full min-h-[48px] px-5 py-3 rounded-2xl bg-[#0a4d2e] hover:bg-[#0d5936] text-[#fffdf5] border-2 border-[#c9a227] font-extrabold text-sm cursor-pointer transition shadow-md"
+          >
+            العودة لشاشة الدخول
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div

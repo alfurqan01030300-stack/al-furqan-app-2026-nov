@@ -1,5 +1,5 @@
 import React from 'react';
-import { Shield, GraduationCap, Users, Download, BookOpen } from 'lucide-react';
+import { Shield, GraduationCap, Users, Download, BookOpen, Sparkles } from 'lucide-react';
 import { AcademyLogo } from './AcademyLogo';
 import { FooterWhatsApp } from './FooterWhatsApp';
 
@@ -11,6 +11,7 @@ interface WelcomeChoiceScreenProps {
   onSelectTeacher: () => void;
   onSelectParent: () => void;
   onSelectAdmin: () => void;
+  onOpenTrialModal: () => void;
   onOpenInstallModal: () => void;
   isInstalled?: boolean;
   isIOS?: boolean;
@@ -61,6 +62,7 @@ export const WelcomeChoiceScreen: React.FC<WelcomeChoiceScreenProps> = ({
   onSelectTeacher,
   onSelectParent,
   onSelectAdmin,
+  onOpenTrialModal,
   onOpenInstallModal,
   isInstalled,
   isIOS,
@@ -84,8 +86,19 @@ export const WelcomeChoiceScreen: React.FC<WelcomeChoiceScreenProps> = ({
       {/* Main Centered Gateway Container */}
       <main className="relative z-10 flex-1 flex flex-col items-center justify-center px-4 py-6 sm:py-10">
         <div className="w-full max-w-md flex flex-col items-center text-center space-y-6 sm:space-y-8">
-          {/* Top Brand: Dynamic Logo with Soft Golden Aura + Titles */}
-          <header className="flex flex-col items-center justify-center text-center space-y-3">
+          {/* Top Brand: Dynamic Logo with Soft Golden Aura + Top-Left Small Download Icon */}
+          <header className="relative w-full flex flex-col items-center justify-center text-center space-y-3">
+            {/* Compact Download Icon Only — Top-Left beside the Logo */}
+            <button
+              type="button"
+              onClick={onOpenInstallModal}
+              aria-label="تحميل التطبيق"
+              title="تحميل التطبيق"
+              className="absolute top-0 left-0 w-10 h-10 rounded-full bg-[#07241B]/85 hover:bg-[#c9a227] text-[#F3E5AB] hover:text-[#07241B] border border-[#c9a227]/70 shadow-lg flex items-center justify-center cursor-pointer transition"
+            >
+              <Download className="w-4 h-4" />
+            </button>
+
             <div className="relative flex items-center justify-center">
               <div
                 aria-hidden="true"
@@ -157,15 +170,15 @@ export const WelcomeChoiceScreen: React.FC<WelcomeChoiceScreenProps> = ({
             </button>
           </div>
 
-          {/* Single 1-Tap App Install Button */}
+          {/* Bottom Large Yellow Button: حصة تجريبية مجانية */}
           <div className="w-full pt-2">
             <button
               type="button"
-              onClick={onOpenInstallModal}
+              onClick={onOpenTrialModal}
               className="w-full py-3.5 px-5 rounded-2xl gold-gradient-btn text-[#07241B] border border-white/60 shadow-lg flex items-center justify-center gap-2.5 text-base font-extrabold cursor-pointer transition transform active:scale-[0.98]"
             >
-              <Download className="w-5 h-5 text-[#07241B] shrink-0" />
-              <span>تحميل التطبيق</span>
+              <Sparkles className="w-5 h-5 text-[#07241B] shrink-0" />
+              <span>حصة تجريبية مجانية</span>
             </button>
           </div>
         </div>

@@ -9,6 +9,7 @@ import {
   Award,
   Bell,
   Clock,
+  Menu,
   MessageSquare,
   RefreshCw,
   Sparkles,
@@ -16,6 +17,8 @@ import {
 } from 'lucide-react';
 import { AdminTab, Header } from './components/Header';
 import { AdminSidebar } from './components/AdminSidebar';
+import { AcademyLogo } from './components/AcademyLogo';
+import { MushafTajweedView } from './components/MushafTajweedView';
 import { AdminDashboardSection } from './components/AdminDashboardSection';
 import { TeacherApplicationsSection } from './components/TeacherApplicationsSection';
 import {
@@ -40,6 +43,7 @@ import { StudentProfile } from './components/StudentProfile';
 import { StudentModal } from './components/StudentModal';
 import { TeachersSection } from './components/TeachersSection';
 import { SettingsSection } from './components/SettingsSection';
+import { PreviewSettingsSection } from './components/PreviewSettingsSection';
 import { TrialLessonModal } from './components/TrialLessonModal';
 import { TrialLessonsSection } from './components/TrialLessonsSection';
 import { ReportsSection } from './components/ReportsSection';
@@ -114,6 +118,13 @@ import {
   saveDurableAcademyData,
 } from './utils/localDataStore';
 import { syncAppIcon } from './utils/pwa';
+import {
+  fetchPreviewSettingsFromServer,
+  pushPreviewSettingsToServer,
+  resolvePreviewDescription,
+  resolvePreviewTitle,
+  syncDocumentPreviewMeta,
+} from './utils/seoMeta';
 import { useOnlineStatus, usePWAInstall } from './hooks/usePWAInstall';
 import { useAppUpdater } from './hooks/useAppUpdater';
 import {
@@ -164,6 +175,8 @@ import {
   savePublicLoginBanner,
   subscribePublicAcademyLogo,
   savePublicAcademyLogo,
+  subscribePublicLinkPreview,
+  savePublicLinkPreview,
   subscribeTrialLessons,
   saveTrialLessonToFirestore,
   deleteTrialLessonFromFirestore,
@@ -186,6 +199,16 @@ import {
   savePublicParentSnapshot,
   fetchPublicParentSnapshot,
 } from './firebase/firestoreService';
+import { isSupabaseConfigured } from './supabase/client';
+import {
+  checkStudentPhoneInSupabase,
+  checkTeacherPhoneInSupabase,
+  fetchStudentsFromSupabase,
+  fetchTeachersFromSupabase,
+  registerStudentAndParentInSupabase,
+  registerTeacherInSupabase,
+  updateTeacherStatusInSupabase,
+} from './supabase/registrationService';
 
 function buildStudentExamResults(studentId: string, examsList: Exam[]): StudentExamResult[] {
   const results: StudentExamResult[] = [];
@@ -247,6 +270,7 @@ export default function App() {
   // Navigation, Role & View States
   const [appRole, setAppRole] = useState<AppRole>('admin');
   const [currentTab, setCurrentTab] = useState<AdminTab>('dashboard');
+  const [portalViewMode, setPortalViewMode] = useState<'portal' | 'mushaf'>('portal');
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
   const [selectedCurriculumGradeId, setSelectedCurriculumGradeId] = useState<string | null>(null);
   const [showTeacherRegisterScreen, setShowTeacherRegisterScreen] = useState<boolean>(false);
@@ -287,6 +311,14 @@ export default function App() {
     initialDurableRef.current = loadDurableAcademyData();
   }
   const initialDurable = initialDurableRef.current;
+  const supabaseOnlyStudentIdsRef = useRef<Set<string>>(new Set());
+  const supabaseOnlyTeacherIdsRef = useRef<Set<string>>(new Set());
+  const initialLocalStudentIdsRef = useRef<Set<string>>(
+    new Set(initialDurable.students.map((s) => s.id))
+  );
+  const initialLocalTeacherIdsRef = useRef<Set<string>>(
+    new Set(initialDurable.teachers.map((t) => t.id))
+  );
 
   const [students, setStudents] = useState<Student[]>(() => initialDurable.students);
   const [teachers, setTeachers] = useState<Teacher[]>(() => initialDurable.teachers);
@@ -385,11 +417,11 @@ export default function App() {
     updatedAt: Date.now(),
   };
 
-  // Persist every real change into durable local mirror so zero data is ever lost on refresh or logout
+  // Persist existing & admin data safely (never delete pre-existing records; keep new Supabase registrations out of localStorage)
   useEffect(() => {
     saveDurableAcademyData({
-      students,
-      teachers,
+      students: students.filter((s) => !supabaseOnlyStudentIdsRef.current.has(s.id)),
+      teachers: teachers.filter((t) => !supabaseOnlyTeacherIdsRef.current.has(t.id)),
       halaqat,
       schedules,
       attendance,
@@ -418,6 +450,52 @@ export default function App() {
     settings,
     pendingSync,
   ]);
+
+  // Sync Manager Students & Teachers from Supabase additively (never overwrite or delete existing data)
+  useEffect(() => {
+    if (!isSupabaseConfigured()) return;
+    let cancelled = false;
+    Promise.all([fetchStudentsFromSupabase(), fetchTeachersFromSupabase()])
+      .then(([sbStudents, sbTeachers]) => {
+        if (cancelled) return;
+        if (sbStudents.length > 0) {
+          for (const s of sbStudents) {
+            if (!initialLocalStudentIdsRef.current.has(s.id)) {
+              supabaseOnlyStudentIdsRef.current.add(s.id);
+            }
+          }
+          setStudents((prev) => {
+            const prevMap = new Map(prev.map((p) => [p.id, p]));
+            const merged = new Map(prevMap);
+            for (const s of sbStudents) {
+              const existing = prevMap.get(s.id);
+              merged.set(s.id, existing ? { ...existing, ...s, reports: existing.reports, certificates: existing.certificates, stars: existing.stars, totalStarsEarned: existing.totalStarsEarned, starCyclesCompleted: existing.starCyclesCompleted, completedJuz: existing.completedJuz, currentSurah: existing.currentSurah, notes: existing.notes || s.notes, assignedTeacherId: existing.assignedTeacherId, halaqaId: existing.halaqaId, halaqaName: existing.halaqaName } : s);
+            }
+            return Array.from(merged.values());
+          });
+        }
+        if (sbTeachers.length > 0) {
+          for (const t of sbTeachers) {
+            if (!initialLocalTeacherIdsRef.current.has(t.id)) {
+              supabaseOnlyTeacherIdsRef.current.add(t.id);
+            }
+          }
+          setTeachers((prev) => {
+            const prevMap = new Map(prev.map((p) => [p.id, p]));
+            const merged = new Map(prevMap);
+            for (const t of sbTeachers) {
+              const existing = prevMap.get(t.id);
+              merged.set(t.id, existing ? { ...existing, ...t } : t);
+            }
+            return Array.from(merged.values());
+          });
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [appSessionLoggedIn, appRole]);
 
   // PWA, Connectivity & App Updater Hooks
   const { isInstallable, isInstalled, isIOS, isInAppBrowser, platform, install } = usePWAInstall();
@@ -620,10 +698,81 @@ export default function App() {
         setSettings((prev) => ({ ...prev, logoDataUrl: remoteLogo }));
       }
     });
+    const unsubLinkPreview = subscribePublicLinkPreview((remotePreview, exists) => {
+      if (!exists) return;
+      setSettings((prev) => {
+        if ((remotePreview.updatedAt || 0) <= (prev.previewUpdatedAt || 0)) {
+          return prev;
+        }
+        const nextLogo = remotePreview.logoDataUrl ?? prev.logoDataUrl;
+        if (nextLogo) {
+          setPublicAcademyLogoUrl(nextLogo);
+          setCachedAcademyLogo(nextLogo);
+        }
+        return {
+          ...prev,
+          academyName: remotePreview.academyName || prev.academyName,
+          previewDescription: remotePreview.description || prev.previewDescription,
+          logoDataUrl: nextLogo,
+          previewUpdatedAt: remotePreview.updatedAt,
+        };
+      });
+    });
     return () => {
       unsubBanner();
       unsubAcademyLogo();
+      unsubLinkPreview();
     };
+  }, []);
+
+  // Synchronize <head> Open Graph / Twitter Card / Title / Description / Favicon whenever Settings change
+  useEffect(() => {
+    syncDocumentPreviewMeta({
+      ...settings,
+      logoDataUrl: settings.logoDataUrl || publicAcademyLogoUrl || '',
+    });
+  }, [
+    settings.academyName,
+    settings.previewDescription,
+    settings.slogan,
+    settings.logoDataUrl,
+    settings.previewUpdatedAt,
+    publicAcademyLogoUrl,
+  ]);
+
+  // Ensure backend /api/preview-settings & client stay hydrated with active Settings
+  useEffect(() => {
+    let cancelled = false;
+    fetchPreviewSettingsFromServer().then((serverPreview) => {
+      if (cancelled || !serverPreview) return;
+      const localUpdated = settings.previewUpdatedAt || 0;
+      if (serverPreview.updatedAt > localUpdated && (serverPreview.academyName || serverPreview.logoDataUrl)) {
+        const nextLogo = serverPreview.logoDataUrl || settings.logoDataUrl;
+        if (nextLogo) {
+          setPublicAcademyLogoUrl(nextLogo);
+          setCachedAcademyLogo(nextLogo);
+        }
+        setSettings((prev) => ({
+          ...prev,
+          academyName: serverPreview.academyName || prev.academyName,
+          previewDescription: serverPreview.description || prev.previewDescription,
+          logoDataUrl: nextLogo,
+          previewUpdatedAt: serverPreview.updatedAt,
+        }));
+      } else {
+        pushPreviewSettingsToServer({
+          academyName: resolvePreviewTitle(settings),
+          description: resolvePreviewDescription(settings),
+          logoDataUrl: settings.logoDataUrl || publicAcademyLogoUrl || '',
+          updatedAt: localUpdated || Date.now(),
+        });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+    // Run once on initial boot hydration
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // First-Launch-Only Google Linking Handler
@@ -697,7 +846,7 @@ export default function App() {
     return { ok: true };
   };
 
-  // 2. Returning Teacher Phone-Only Login (checks Firestore & local mirror)
+  // 2. Returning Teacher Phone-Only Login (checks Supabase & Firestore)
   const handleTeacherPhoneOnlyLogin = async (
     phoneInput: string
   ): Promise<{ ok: boolean; notRegistered?: boolean; error?: string }> => {
@@ -707,7 +856,14 @@ export default function App() {
     }
 
     let matchedTeacher: Teacher | null = null;
-    if (isFirebaseConfigured()) {
+    if (isSupabaseConfigured()) {
+      const sbTeachers = await fetchTeachersFromSupabase().catch(() => []);
+      matchedTeacher =
+        sbTeachers.find(
+          (t) => normalizePhoneAuth(t.normalizedPhone || t.phone) === normalized
+        ) || null;
+    }
+    if (!matchedTeacher && isFirebaseConfigured()) {
       matchedTeacher = await findTeacherInFirestoreByPhone(normalized).catch(() => null);
     }
     if (!matchedTeacher) {
@@ -725,6 +881,13 @@ export default function App() {
       };
     }
 
+    if (matchedTeacher.status === 'pending') {
+      return {
+        ok: false,
+        error: 'تم ارسال طلبك للمدير، استنى الموافقة',
+      };
+    }
+
     if (matchedTeacher.status === 'rejected') {
       return {
         ok: false,
@@ -739,6 +902,7 @@ export default function App() {
     ]);
     setSelectedPortalTeacherId(matchedTeacher.id);
     setAdminPreviewingTeacher(false);
+    setPortalViewMode('portal');
     setAppRole('teacher');
     setAppSessionLoggedIn(true);
 
@@ -768,12 +932,12 @@ export default function App() {
     return { ok: true };
   };
 
-  // 3. First-Time Teacher Self-Registration Handler (saves to localStorage + Firestore & auto-enters Teacher Dashboard)
+  // 3. First-Time Teacher Self-Registration Handler (Supabase ONLY — ZERO localStorage saving)
   const handleCheckTeacherPhoneExists = async (normalizedPhone: string): Promise<boolean> => {
-    const localHit = teachers.some(
-      (t) => normalizePhoneAuth(t.normalizedPhone || t.phone) === normalizedPhone
-    );
-    if (localHit) return true;
+    if (isSupabaseConfigured()) {
+      const sbExists = await checkTeacherPhoneInSupabase(normalizedPhone).catch(() => false);
+      if (sbExists) return true;
+    }
     if (isFirebaseConfigured()) {
       const remoteHit = await findTeacherInFirestoreByPhone(normalizedPhone).catch(() => null);
       if (remoteHit) return true;
@@ -783,16 +947,14 @@ export default function App() {
 
   const handleSelfRegisterTeacher = async (
     payload: TeacherSelfRegistrationPayload
-  ): Promise<{ ok: boolean; alreadyExists?: boolean; error?: string }> => {
+  ): Promise<{ ok: boolean; alreadyExists?: boolean; pendingApproval?: boolean; error?: string }> => {
     const normalized = normalizePhoneAuth(payload.phone);
     if (!normalized || normalized.length < 9) {
       return { ok: false, error: 'يرجى إدخال رقم تليفون / واتساب صحيح.' };
     }
 
-    const existsLocally = teachers.some(
-      (t) => normalizePhoneAuth(t.normalizedPhone || t.phone) === normalized
-    );
-    if (existsLocally) {
+    const existsRemotely = await handleCheckTeacherPhoneExists(normalized);
+    if (existsRemotely) {
       return {
         ok: false,
         alreadyExists: true,
@@ -800,95 +962,49 @@ export default function App() {
       };
     }
 
-    const ownerUid = authUser?.uid || linkedGoogle?.uid || 'academy_shared';
+    const teacherId = `tch-${normalized}-${Date.now()}`;
     const subjectsSpec = payload.subjects.join(' • ') || 'قرآن';
 
-    let savedTeacher: Teacher = {
-      id: `tch-${normalized}-${Date.now()}`,
-      name: payload.name.trim(),
-      phone: normalized,
-      normalizedPhone: normalized,
-      role: 'teacher',
-      status: 'pending',
-      registeredBySelf: true,
-      ownerUid,
-      age: payload.age,
-      location: payload.location.trim(),
-      teachingSystems: payload.teachingSystems,
-      teachingMode: payload.teachingMode,
-      teachingStages: payload.teachingStages,
-      teachingGrades: payload.teachingGrades,
-      teachingTrack: payload.teachingTrack || '',
-      subjects: payload.subjects,
-      dailyHours: payload.dailyHours,
-      availablePeriod: payload.availablePeriod,
-      experienceYears: payload.experienceYears,
-      avatarUrl: payload.avatarUrl || '',
-      specialization: subjectsSpec,
-      notes: '',
-      sessionRate: settings.defaultSessionRate ?? 40,
-      createdAt: Date.now(),
-    };
-
-    let savedToCloud = false;
-    if (isFirebaseConfigured()) {
-      try {
-        const res = await registerTeacherAccountInFirestore({
-          name: payload.name.trim(),
-          phone: normalized,
-          age: payload.age,
-          location: payload.location.trim(),
-          teachingSystems: payload.teachingSystems,
-          teachingMode: payload.teachingMode,
-          teachingStages: payload.teachingStages,
-          teachingGrades: payload.teachingGrades,
-          teachingTrack: payload.teachingTrack || '',
-          subjects: payload.subjects,
-          dailyHours: payload.dailyHours,
-          availablePeriod: payload.availablePeriod,
-          experienceYears: payload.experienceYears,
-          avatarUrl: payload.avatarUrl || '',
-          specialization: subjectsSpec,
-          sessionRate: settings.defaultSessionRate ?? 40,
-          ownerUid,
-        });
-        if (res.alreadyExists) {
-          return {
-            ok: false,
-            alreadyExists: true,
-            error: 'الرقم ده متسجل قبل كده',
-          };
-        }
-        savedTeacher = res.teacher;
-        savedToCloud = true;
-      } catch (err) {
-        console.warn('Self-registration Firestore queued locally:', err);
-      }
+    // Save strictly to Supabase (no localStorage persistence for registration)
+    try {
+      await registerTeacherInSupabase({
+        id: teacherId,
+        name: payload.name.trim(),
+        phone: normalized,
+        age: payload.age,
+        location: payload.location.trim(),
+        teachingSystems: payload.teachingSystems,
+        teachingMode: payload.teachingMode,
+        teachingStages: payload.teachingStages,
+        teachingGrades: payload.teachingGrades,
+        teachingTrack: payload.teachingTrack || '',
+        subjects: payload.subjects,
+        dailyHours: payload.dailyHours,
+        availablePeriod: payload.availablePeriod,
+        experienceYears: payload.experienceYears,
+        avatarUrl: payload.avatarUrl || '',
+        specialization: subjectsSpec,
+      });
+    } catch (err: any) {
+      return {
+        ok: false,
+        error:
+          err?.message ||
+          'تعذر إرسال الطلب إلى Supabase. تأكد من مفتاح الربط وصلاحيات الجدول.',
+      };
     }
 
-    setTeachers((prev) => [
-      savedTeacher,
-      ...prev.filter((t) => t.id !== savedTeacher.id),
-    ]);
-    syncEntityPending('teachers', savedTeacher.id, !savedToCloud);
-
-    // Log right into the Teacher Portal after saving once & remember device registered teacher
-    setStoredLastTeacherPhone(normalized);
-    setSelectedPortalTeacherId(savedTeacher.id);
-    setAdminPreviewingTeacher(false);
-    setAppRole('teacher');
-    setShowTeacherRegisterScreen(false);
-    setTeacherPrefillPhone('');
-    setAppSessionLoggedIn(true);
-    return { ok: true };
+    return { ok: true, pendingApproval: true };
   };
 
-  // 3B. Student Self-Registration Handler (saves curriculum system/stage/grade/subjects + enters Student Portal)
+  // 3B. Student & Parent Self-Registration Handler (Supabase ONLY — ZERO localStorage saving)
   const handleCheckStudentPhoneExists = async (normalizedPhone: string): Promise<boolean> => {
     const target = normalizePhoneForMatch(normalizedPhone);
     if (!target) return false;
-    const localHit = students.some((s) => normalizePhoneForMatch(s.phone) === target);
-    if (localHit) return true;
+    if (isSupabaseConfigured()) {
+      const sbExists = await checkStudentPhoneInSupabase(target).catch(() => false);
+      if (sbExists) return true;
+    }
     if (isFirebaseConfigured() && !isTemporaryPreviewHost()) {
       const remoteHit = await findStudentInFirestoreByPhone(target).catch(() => null);
       if (remoteHit) return true;
@@ -904,10 +1020,8 @@ export default function App() {
       return { ok: false, error: 'يرجى إدخال رقم تليفون صحيح.' };
     }
 
-    const existsLocally = students.some(
-      (s) => normalizePhoneForMatch(s.phone) === normalizedPhone
-    );
-    if (existsLocally) {
+    const existsRemotely = await handleCheckStudentPhoneExists(normalizedPhone);
+    if (existsRemotely) {
       return {
         ok: false,
         alreadyExists: true,
@@ -923,8 +1037,36 @@ export default function App() {
         ? `${sysLabel} • ${gradeTitle} • ${payload.selectedSubjects[0]}`
         : `${sysLabel} • ${gradeTitle}`;
 
+    const studentId = `std-${Date.now()}`;
+
+    try {
+      await registerStudentAndParentInSupabase({
+        id: studentId,
+        name: payload.name.trim(),
+        age: payload.age,
+        phone: payload.phone.trim(),
+        parentName: payload.parentName.trim() || `ولي أمر ${payload.name.trim()}`,
+        parentPhone: payload.parentPhone.trim() || payload.phone.trim(),
+        educationSystem: payload.educationSystem,
+        stage: payload.stage,
+        gradeLevel: payload.gradeLevel,
+        track: payload.stage === 'ثانوي' ? payload.track || '' : '',
+        studyScope: payload.studyScope,
+        selectedSubjects: payload.selectedSubjects,
+        course: courseLabel,
+        registeredDate: todayStr,
+      });
+    } catch (err: any) {
+      return {
+        ok: false,
+        error:
+          err?.message ||
+          'تعذر حفظ التسجيل في Supabase. تأكد من مفتاح الربط وصلاحيات جدول students و parents.',
+      };
+    }
+
     const newStudent: Student = {
-      id: `std-${Date.now()}`,
+      id: studentId,
       name: payload.name.trim(),
       age: String(payload.age),
       stage: payload.stage,
@@ -956,20 +1098,11 @@ export default function App() {
       certificates: [],
     };
 
-    let savedToCloud = false;
-    if (isFirebaseConfigured() && !isTemporaryPreviewHost()) {
-      try {
-        await registerStudentAccountInFirestore(newStudent);
-        savedToCloud = true;
-      } catch (err) {
-        console.warn('Student self-registration Firestore queued locally:', err);
-      }
-    }
-
+    supabaseOnlyStudentIdsRef.current.add(newStudent.id);
     setStudents((prev) => [newStudent, ...prev.filter((s) => s.id !== newStudent.id)]);
-    syncEntityPending('students', newStudent.id, !savedToCloud);
     setLoggedStudentId(newStudent.id);
     setShowStudentRegisterScreen(false);
+    setPortalViewMode('portal');
     setEntryGateMode('student');
     return { ok: true };
   };
@@ -978,6 +1111,9 @@ export default function App() {
     setTeachers((prev) =>
       prev.map((t) => (t.id === teacherId ? { ...t, status: 'active' } : t))
     );
+    if (isSupabaseConfigured()) {
+      updateTeacherStatusInSupabase(teacherId, 'active').catch(() => {});
+    }
     if (isFirebaseConfigured()) {
       updateTeacherStatusInFirestore(teacherId, 'active').catch((err) =>
         console.warn('Teacher approve Firestore warning:', err)
@@ -989,6 +1125,9 @@ export default function App() {
     setTeachers((prev) =>
       prev.map((t) => (t.id === teacherId ? { ...t, status: 'rejected' } : t))
     );
+    if (isSupabaseConfigured()) {
+      updateTeacherStatusInSupabase(teacherId, 'rejected').catch(() => {});
+    }
     if (isFirebaseConfigured()) {
       updateTeacherStatusInFirestore(teacherId, 'rejected').catch((err) =>
         console.warn('Teacher reject Firestore warning:', err)
@@ -1001,6 +1140,7 @@ export default function App() {
     clearAppSession();
     setAppSessionLoggedIn(false);
     setIsSidebarOpen(false);
+    setPortalViewMode('portal');
     setSelectedCurriculumGradeId(null);
     setShowTeacherRegisterScreen(false);
     setShowStudentRegisterScreen(false);
@@ -1899,9 +2039,15 @@ export default function App() {
   // Settings Actions
   const handleSaveSettings = (newSettings: AcademySettings) => {
     const nextLogo = newSettings.logoDataUrl || '';
+    const previewTs = Date.now();
+    const resolvedDesc = resolvePreviewDescription(newSettings);
+    const resolvedTitle = resolvePreviewTitle(newSettings);
     const merged: AcademySettings = {
       ...newSettings,
+      academyName: resolvedTitle,
       logoDataUrl: nextLogo,
+      previewDescription: resolvedDesc,
+      previewUpdatedAt: previewTs,
       loginBannerUrl: loginBannerUrl || newSettings.loginBannerUrl || '',
     };
     if (merged.managerPin && merged.managerPinConfigured) {
@@ -1910,6 +2056,13 @@ export default function App() {
     setSettings(merged);
     setPublicAcademyLogoUrl(nextLogo);
     setCachedAcademyLogo(nextLogo);
+    syncDocumentPreviewMeta(merged);
+    pushPreviewSettingsToServer({
+      academyName: resolvedTitle,
+      description: resolvedDesc,
+      logoDataUrl: nextLogo,
+      updatedAt: previewTs,
+    });
     setPendingSync((prev) => ({ ...prev, settingsPending: true }));
     if (authUser && isFirebaseConfigured()) {
       saveSettingsToFirestore(authUser.uid, merged)
@@ -1918,7 +2071,30 @@ export default function App() {
       savePublicAcademyLogo(authUser.uid, nextLogo).catch((err) =>
         console.warn('Public logo sync warning:', err)
       );
+      savePublicLinkPreview(authUser.uid, {
+        academyName: resolvedTitle,
+        description: resolvedDesc,
+        logoDataUrl: nextLogo,
+        updatedAt: previewTs,
+      }).catch((err) => console.warn('Public link preview sync warning:', err));
     }
+  };
+
+  const handleSavePreviewSettings = async (payload: {
+    academyName: string;
+    description: string;
+    logoDataUrl: string;
+  }) => {
+    const previewTs = Date.now();
+    const updated: AcademySettings = {
+      ...settings,
+      academyName: payload.academyName.trim() || DEFAULT_SETTINGS.academyName,
+      previewDescription: payload.description.trim(),
+      slogan: settings.slogan || payload.description.trim(),
+      logoDataUrl: payload.logoDataUrl,
+      previewUpdatedAt: previewTs,
+    };
+    handleSaveSettings(updated);
   };
 
   const handleSaveLoginBanner = async (newBannerUrl: string) => {
@@ -2376,7 +2552,7 @@ export default function App() {
       <div
         role="status"
         aria-live="polite"
-        className={`no-print fixed top-20 left-4 right-4 max-w-md mx-auto z-50 rounded-2xl p-3.5 border-2 flex items-center justify-between gap-3 shadow-2xl backdrop-blur-md ${
+        className={`no-print fixed top-20 left-4 right-4 max-w-md mx-auto z-[100] rounded-2xl p-3.5 border-2 flex items-center justify-between gap-3 shadow-2xl backdrop-blur-md ${
           updateStatus === 'updating'
             ? 'bg-amber-950/95 border-[#D4AF37] text-[#F3E5AB]'
             : updateStatus === 'up-to-date'
@@ -2385,11 +2561,15 @@ export default function App() {
         }`}
       >
         <div className="flex items-center gap-2.5 text-xs sm:text-sm font-bold">
-          <RefreshCw
-            className={`w-4 h-4 text-[#D4AF37] shrink-0 ${
-              updateStatus === 'checking' || updateStatus === 'updating' ? 'animate-spin' : ''
-            }`}
-          />
+          {updateStatus === 'up-to-date' ? (
+            <Sparkles className="w-4 h-4 text-emerald-300 shrink-0" />
+          ) : (
+            <RefreshCw
+              className={`w-4 h-4 text-[#D4AF37] shrink-0 ${
+                updateStatus === 'checking' || updateStatus === 'updating' ? 'animate-spin' : ''
+              }`}
+            />
+          )}
           <span>{updateMessage}</span>
         </div>
         {updateStatus === 'up-to-date' && (
@@ -2420,6 +2600,15 @@ export default function App() {
           setIsInstallModalOpen(false);
         }
       }}
+    />
+  );
+
+  const trialModalElement = (
+    <TrialLessonModal
+      isOpen={isTrialModalOpen}
+      onClose={() => setIsTrialModalOpen(false)}
+      onSubmit={handleSaveTrialLesson}
+      managerWhatsApp={settings.managerWhatsApp}
     />
   );
 
@@ -2482,56 +2671,126 @@ export default function App() {
       >
         {updateAlertBanner}
         {updateProgressToast}
-        <main className="flex-1 w-full max-w-full overflow-x-hidden flex flex-col justify-center py-4 px-2 sm:px-4">
-          {directLinkLoading ? (
-            <div className="flex flex-col items-center justify-center gap-3 py-16">
-              <RefreshCw className="w-8 h-8 text-[#D4AF37] animate-spin" />
-              <p className="text-sm font-bold text-[#F3E5AB]">جاري فتح ملف متابعة الطالب...</p>
+        <header className="no-print sticky top-0 z-40 w-full max-w-full bg-[#083c24]/95 backdrop-blur-md border-b border-[#c9a227]/45 px-3 sm:px-6 py-2.5 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <button
+              type="button"
+              onClick={() => setIsSidebarOpen((p) => !p)}
+              aria-label="فتح القائمة الجانبية"
+              className="lg:hidden shrink-0 inline-flex items-center justify-center w-10 h-10 rounded-xl bg-[#07241B] text-[#F3E5AB] border border-[#c9a227]/70 cursor-pointer"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+            <AcademyLogo logoUrl={effectiveLogoUrl} size="sm" />
+            <div className="min-w-0">
+              <h1 className="text-sm sm:text-base font-extrabold text-white truncate">
+                {portalViewMode === 'mushaf' ? 'المصحف المجود' : 'بوابة ولي الأمر'}
+              </h1>
+              <p className="text-[11px] text-[#e5c76b] truncate hidden sm:block">
+                {settings.academyName}
+              </p>
             </div>
-          ) : (
-            <ParentPortalView
-              students={portalStudents}
-              teachers={portalTeachers}
-              attendance={portalAttendance}
-              payments={portalPayments}
-              exams={exams}
-              homeworks={homeworks}
-              directExamResults={directParentSnapshot?.exams || []}
-              teacherRatings={teacherRatings}
-              settings={settings}
-              loggedParentPhone={loggedParentPhone}
-              onLoginParent={(phone, remoteMatch) => {
-                if (remoteMatch) setDirectParentSnapshot(remoteMatch);
-                setLoggedParentPhone(phone);
-              }}
-              onLogoutParent={() => {
+          </div>
+          {!directParentChildId && (
+            <button
+              type="button"
+              onClick={() => {
                 setDirectParentSnapshot(null);
                 setLoggedParentPhone('');
+                setPortalViewMode('portal');
+                setEntryGateMode('welcome');
               }}
-              onOpenCertificate={(st, cert) => setCertModalState({ student: st, cert })}
-              onViewReceipt={(pay) => setActiveReceipt(pay)}
-              onLookupRemoteByPhone={async (norm) => {
-                const direct = await fetchPublicParentSnapshot(`phone_${norm}`);
-                if (direct) return direct;
-                if (norm.length > 9) {
-                  return await fetchPublicParentSnapshot(`phone_${norm.slice(-9)}`);
-                }
-                return null;
-              }}
-              onBack={
-                directParentChildId
-                  ? undefined
-                  : () => {
-                      setDirectParentSnapshot(null);
-                      setLoggedParentPhone('');
-                      setEntryGateMode('welcome');
-                    }
-              }
-              isDirectLink={Boolean(directParentChildId)}
-              directChildId={directParentChildId}
-            />
+              className="px-3 py-1.5 rounded-xl bg-[#07241B] text-[#F3E5AB] border border-[#c9a227]/50 text-xs font-extrabold cursor-pointer shrink-0"
+            >
+              الرئيسية
+            </button>
           )}
-        </main>
+        </header>
+
+        <div className="flex-1 flex flex-col lg:flex-row w-full max-w-full overflow-x-hidden">
+          <AdminSidebar
+            appRole="parent"
+            isOpen={isSidebarOpen}
+            onClose={() => setIsSidebarOpen(false)}
+            currentTab={currentTab}
+            onTabChange={() => {}}
+            portalViewMode={portalViewMode}
+            onSelectPortalView={setPortalViewMode}
+            selectedGradeId={null}
+            onSelectGradeId={() => {}}
+            settings={{ ...settings, logoDataUrl: effectiveLogoUrl }}
+            pendingTeachersCount={0}
+            newTrialLessonsCount={0}
+            trashCount={0}
+            onOpenTrashBin={() => {}}
+            onOpenFirebaseStatus={() => {}}
+            firebaseConnected={isFirebaseActuallyConnected}
+            onSignOut={
+              directParentChildId
+                ? undefined
+                : () => {
+                    setDirectParentSnapshot(null);
+                    setLoggedParentPhone('');
+                    setPortalViewMode('portal');
+                    setEntryGateMode('welcome');
+                  }
+            }
+          />
+
+          <main className="flex-1 w-full min-w-0 max-w-7xl mx-auto overflow-x-hidden flex flex-col py-4 px-2 sm:px-5">
+            {portalViewMode === 'mushaf' ? (
+              <MushafTajweedView />
+            ) : directLinkLoading ? (
+              <div className="flex flex-col items-center justify-center gap-3 py-16">
+                <RefreshCw className="w-8 h-8 text-[#D4AF37] animate-spin" />
+                <p className="text-sm font-bold text-[#F3E5AB]">جاري فتح ملف متابعة الطالب...</p>
+              </div>
+            ) : (
+              <ParentPortalView
+                students={portalStudents}
+                teachers={portalTeachers}
+                attendance={portalAttendance}
+                payments={portalPayments}
+                exams={exams}
+                homeworks={homeworks}
+                directExamResults={directParentSnapshot?.exams || []}
+                teacherRatings={teacherRatings}
+                settings={settings}
+                loggedParentPhone={loggedParentPhone}
+                onLoginParent={(phone, remoteMatch) => {
+                  if (remoteMatch) setDirectParentSnapshot(remoteMatch);
+                  setLoggedParentPhone(phone);
+                }}
+                onLogoutParent={() => {
+                  setDirectParentSnapshot(null);
+                  setLoggedParentPhone('');
+                }}
+                onOpenCertificate={(st, cert) => setCertModalState({ student: st, cert })}
+                onViewReceipt={(pay) => setActiveReceipt(pay)}
+                onLookupRemoteByPhone={async (norm) => {
+                  const direct = await fetchPublicParentSnapshot(`phone_${norm}`);
+                  if (direct) return direct;
+                  if (norm.length > 9) {
+                    return await fetchPublicParentSnapshot(`phone_${norm.slice(-9)}`);
+                  }
+                  return null;
+                }}
+                onBack={
+                  directParentChildId
+                    ? undefined
+                    : () => {
+                        setDirectParentSnapshot(null);
+                        setLoggedParentPhone('');
+                        setPortalViewMode('portal');
+                        setEntryGateMode('welcome');
+                      }
+                }
+                isDirectLink={Boolean(directParentChildId)}
+                directChildId={directParentChildId}
+              />
+            )}
+          </main>
+        </div>
 
         {/* Read-only Receipt & Certificate Viewing Modals */}
         <ReceiptModal
@@ -2574,57 +2833,123 @@ export default function App() {
       >
         {updateAlertBanner}
         {updateProgressToast}
-        <main className="flex-1 w-full max-w-full overflow-x-hidden flex flex-col justify-center py-4 px-2 sm:px-4">
-          <StudentPortalView
-            students={students}
-            teachers={teachers}
-            halaqat={halaqat}
-            schedules={schedules}
-            attendance={attendance}
-            exams={exams}
-            homeworks={homeworks}
-            settings={settings}
-            loggedStudentId={loggedStudentId}
-            onLoginStudent={(studentId) => setLoggedStudentId(studentId)}
-            onLogoutStudent={() => setLoggedStudentId('')}
-            onOpenCertificate={(st, cert) => setCertModalState({ student: st, cert })}
-            onLookupRemoteByPhone={async (norm) => {
-              const direct = await fetchPublicParentSnapshot(`phone_${norm}`);
-              if (direct) return direct;
-              if (norm.length > 9) {
-                const shortMatch = await fetchPublicParentSnapshot(`phone_${norm.slice(-9)}`);
-                if (shortMatch) return shortMatch;
-              }
-              if (isFirebaseConfigured() && !isTemporaryPreviewHost()) {
-                const studentMatch = await findStudentInFirestoreByPhone(norm).catch(() => null);
-                if (studentMatch) {
-                  const tObj = teachers.find((t) => t.id === studentMatch.assignedTeacherId);
-                  return {
-                    student: studentMatch,
-                    teacherName: tObj?.name || '',
-                    attendance: [],
-                    payments: [],
-                    exams: buildStudentExamResults(studentMatch.id, exams),
-                    currency: settings.currency || 'ر.س',
-                    academyName: settings.academyName,
-                    updatedAt: Date.now(),
-                  };
-                }
-              }
-              return null;
-            }}
-            showRegisterView={showStudentRegisterScreen}
-            onOpenStudentRegister={() => setShowStudentRegisterScreen(true)}
-            onCloseRegisterView={() => setShowStudentRegisterScreen(false)}
-            onSubmitStudentRegistration={handleSelfRegisterStudent}
-            onCheckStudentPhoneExists={handleCheckStudentPhoneExists}
-            onBack={() => {
+        <header className="no-print sticky top-0 z-40 w-full max-w-full bg-[#083c24]/95 backdrop-blur-md border-b border-[#c9a227]/45 px-3 sm:px-6 py-2.5 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <button
+              type="button"
+              onClick={() => setIsSidebarOpen((p) => !p)}
+              aria-label="فتح القائمة الجانبية"
+              className="lg:hidden shrink-0 inline-flex items-center justify-center w-10 h-10 rounded-xl bg-[#07241B] text-[#F3E5AB] border border-[#c9a227]/70 cursor-pointer"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+            <AcademyLogo logoUrl={effectiveLogoUrl} size="sm" />
+            <div className="min-w-0">
+              <h1 className="text-sm sm:text-base font-extrabold text-white truncate">
+                {portalViewMode === 'mushaf' ? 'المصحف المجود' : 'بوابة الطالب'}
+              </h1>
+              <p className="text-[11px] text-[#e5c76b] truncate hidden sm:block">
+                {settings.academyName}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
               setLoggedStudentId('');
               setShowStudentRegisterScreen(false);
+              setPortalViewMode('portal');
+              setEntryGateMode('welcome');
+            }}
+            className="px-3 py-1.5 rounded-xl bg-[#07241B] text-[#F3E5AB] border border-[#c9a227]/50 text-xs font-extrabold cursor-pointer shrink-0"
+          >
+            الرئيسية
+          </button>
+        </header>
+
+        <div className="flex-1 flex flex-col lg:flex-row w-full max-w-full overflow-x-hidden">
+          <AdminSidebar
+            appRole="student"
+            isOpen={isSidebarOpen}
+            onClose={() => setIsSidebarOpen(false)}
+            currentTab={currentTab}
+            onTabChange={() => {}}
+            portalViewMode={portalViewMode}
+            onSelectPortalView={setPortalViewMode}
+            selectedGradeId={null}
+            onSelectGradeId={() => {}}
+            settings={{ ...settings, logoDataUrl: effectiveLogoUrl }}
+            pendingTeachersCount={0}
+            newTrialLessonsCount={0}
+            trashCount={0}
+            onOpenTrashBin={() => {}}
+            onOpenFirebaseStatus={() => {}}
+            firebaseConnected={isFirebaseActuallyConnected}
+            onSignOut={() => {
+              setLoggedStudentId('');
+              setShowStudentRegisterScreen(false);
+              setPortalViewMode('portal');
               setEntryGateMode('welcome');
             }}
           />
-        </main>
+
+          <main className="flex-1 w-full min-w-0 max-w-7xl mx-auto overflow-x-hidden flex flex-col py-4 px-2 sm:px-5">
+            {portalViewMode === 'mushaf' ? (
+              <MushafTajweedView />
+            ) : (
+              <StudentPortalView
+                students={students}
+                teachers={teachers}
+                halaqat={halaqat}
+                schedules={schedules}
+                attendance={attendance}
+                exams={exams}
+                homeworks={homeworks}
+                settings={settings}
+                loggedStudentId={loggedStudentId}
+                onLoginStudent={(studentId) => setLoggedStudentId(studentId)}
+                onLogoutStudent={() => setLoggedStudentId('')}
+                onOpenCertificate={(st, cert) => setCertModalState({ student: st, cert })}
+                onLookupRemoteByPhone={async (norm) => {
+                  const direct = await fetchPublicParentSnapshot(`phone_${norm}`);
+                  if (direct) return direct;
+                  if (norm.length > 9) {
+                    const shortMatch = await fetchPublicParentSnapshot(`phone_${norm.slice(-9)}`);
+                    if (shortMatch) return shortMatch;
+                  }
+                  if (isFirebaseConfigured() && !isTemporaryPreviewHost()) {
+                    const studentMatch = await findStudentInFirestoreByPhone(norm).catch(() => null);
+                    if (studentMatch) {
+                      const tObj = teachers.find((t) => t.id === studentMatch.assignedTeacherId);
+                      return {
+                        student: studentMatch,
+                        teacherName: tObj?.name || '',
+                        attendance: [],
+                        payments: [],
+                        exams: buildStudentExamResults(studentMatch.id, exams),
+                        currency: settings.currency || 'ر.س',
+                        academyName: settings.academyName,
+                        updatedAt: Date.now(),
+                      };
+                    }
+                  }
+                  return null;
+                }}
+                showRegisterView={showStudentRegisterScreen}
+                onOpenStudentRegister={() => setShowStudentRegisterScreen(true)}
+                onCloseRegisterView={() => setShowStudentRegisterScreen(false)}
+                onSubmitStudentRegistration={handleSelfRegisterStudent}
+                onCheckStudentPhoneExists={handleCheckStudentPhoneExists}
+                onBack={() => {
+                  setLoggedStudentId('');
+                  setShowStudentRegisterScreen(false);
+                  setPortalViewMode('portal');
+                  setEntryGateMode('welcome');
+                }}
+              />
+            )}
+          </main>
+        </div>
 
         <CertificateModal
           student={certModalState?.student || null}
@@ -2676,6 +3001,7 @@ export default function App() {
               }
             }}
             onSelectParent={() => setEntryGateMode('parent')}
+            onOpenTrialModal={() => setIsTrialModalOpen(true)}
             onOpenInstallModal={handleInstallTrigger}
             isInstalled={isInstalled}
             isIOS={isIOS}
@@ -2685,6 +3011,7 @@ export default function App() {
             isUpdating={isUpdatingApp}
             hasUpdateAvailable={hasUpdateAvailable}
           />
+          {trialModalElement}
           {installModalElement}
         </>
       );
@@ -2810,6 +3137,7 @@ export default function App() {
           if (isTeacherSessionLocked) return;
           setAdminPreviewingTeacher(false);
           setIsSidebarOpen(false);
+          setPortalViewMode('portal');
           setAppRole(role);
         }}
         currentTab={currentTab}
@@ -2824,7 +3152,7 @@ export default function App() {
         }}
         settings={{ ...settings, logoDataUrl: effectiveLogoUrl }}
         onOpenInstallModal={handleInstallTrigger}
-        showSidebarToggle={appRole === 'admin' && !isTeacherSessionLocked}
+        showSidebarToggle={true}
         onToggleSidebar={() => setIsSidebarOpen((prev) => !prev)}
         onOpenTrialModal={() => setIsTrialModalOpen(true)}
         isOnline={isOnline}
@@ -2866,36 +3194,37 @@ export default function App() {
         </div>
       )}
 
-      {/* Main Workspace with Slide-Over Sidebar (Mobile) & Persistent Sidebar (Desktop) */}
+      {/* Main Workspace with Slide-Over Sidebar (Mobile) & Persistent Sidebar (Desktop) for ALL roles */}
       <div className="flex-1 flex flex-col lg:flex-row w-full max-w-full overflow-x-hidden">
-        {appRole === 'admin' && (
-          <AdminSidebar
-            isOpen={isSidebarOpen}
-            onClose={() => setIsSidebarOpen(false)}
-            currentTab={currentTab}
-            onTabChange={(tab) => {
-              setCurrentTab(tab);
-              if (tab !== 'students') setSelectedStudentId(null);
-              if (tab !== 'curricula') setSelectedCurriculumGradeId(null);
-            }}
-            selectedGradeId={selectedCurriculumGradeId}
-            onSelectGradeId={(gradeId) => {
-              setSelectedCurriculumGradeId(gradeId);
-              setCurrentTab('curricula');
-            }}
-            settings={{ ...settings, logoDataUrl: effectiveLogoUrl }}
-            pendingTeachersCount={pendingTeachersCount}
-            newTrialLessonsCount={newTrialLessonsCount}
-            trashCount={trashItems.length}
-            onOpenTrashBin={() => setIsTrashBinOpen(true)}
-            onOpenFirebaseStatus={handleOpenFirebaseStatus}
-            firebaseConnected={isFirebaseActuallyConnected}
-            onOpenTrialModal={() => setIsTrialModalOpen(true)}
-            onCheckUpdate={forceUpdateNow}
-            hasUpdateAvailable={hasUpdateAvailable}
-            onSignOut={handleSignOut}
-          />
-        )}
+        <AdminSidebar
+          appRole={appRole}
+          isOpen={isSidebarOpen}
+          onClose={() => setIsSidebarOpen(false)}
+          currentTab={currentTab}
+          onTabChange={(tab) => {
+            setCurrentTab(tab);
+            if (tab !== 'students') setSelectedStudentId(null);
+            if (tab !== 'curricula') setSelectedCurriculumGradeId(null);
+          }}
+          portalViewMode={portalViewMode}
+          onSelectPortalView={setPortalViewMode}
+          selectedGradeId={selectedCurriculumGradeId}
+          onSelectGradeId={(gradeId) => {
+            setSelectedCurriculumGradeId(gradeId);
+            setCurrentTab('curricula');
+          }}
+          settings={{ ...settings, logoDataUrl: effectiveLogoUrl }}
+          pendingTeachersCount={pendingTeachersCount}
+          newTrialLessonsCount={newTrialLessonsCount}
+          trashCount={trashItems.length}
+          onOpenTrashBin={() => setIsTrashBinOpen(true)}
+          onOpenFirebaseStatus={handleOpenFirebaseStatus}
+          firebaseConnected={isFirebaseActuallyConnected}
+          onOpenTrialModal={() => setIsTrialModalOpen(true)}
+          onCheckUpdate={forceUpdateNow}
+          hasUpdateAvailable={hasUpdateAvailable}
+          onSignOut={handleSignOut}
+        />
 
         <main className="no-print flex-1 w-full min-w-0 max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 pt-4 sm:pt-6 space-y-5 overflow-x-hidden">
           {syncPermissionError && (
@@ -3143,6 +3472,8 @@ export default function App() {
                 />
               )}
 
+              {currentTab === 'mushaf' && <MushafTajweedView />}
+
               {currentTab === 'halaqat' && (
                 <HalaqatSection
                   halaqat={halaqat}
@@ -3205,6 +3536,13 @@ export default function App() {
                 />
               )}
 
+              {currentTab === 'previewSettings' && (
+                <PreviewSettingsSection
+                  settings={{ ...settings, logoDataUrl: effectiveLogoUrl }}
+                  onSavePreviewSettings={handleSavePreviewSettings}
+                />
+              )}
+
               {currentTab === 'settings' && (
                 <SettingsSection
                   settings={settings}
@@ -3230,6 +3568,7 @@ export default function App() {
                   userEmail={linkedGoogle?.email || authUser?.email || ''}
                   linkedGoogle={linkedGoogle}
                   onSignOut={handleSignOut}
+                  onOpenPreviewSettings={() => setCurrentTab('previewSettings')}
                 />
               )}
             </>
@@ -3237,71 +3576,83 @@ export default function App() {
 
           {/* ROLE 2: STUDENT PORTAL */}
           {appRole === 'student' && (
-            <StudentPortalView
-              students={students}
-              teachers={teachers}
-              halaqat={halaqat}
-              schedules={schedules}
-              attendance={attendance}
-              exams={exams}
-              homeworks={homeworks}
-              settings={settings}
-              loggedStudentId={loggedStudentId}
-              onLoginStudent={(studentId) => setLoggedStudentId(studentId)}
-              onLogoutStudent={() => setLoggedStudentId('')}
-              onOpenCertificate={(st, cert) => setCertModalState({ student: st, cert })}
-              showRegisterView={showStudentRegisterScreen}
-              onOpenStudentRegister={() => setShowStudentRegisterScreen(true)}
-              onCloseRegisterView={() => setShowStudentRegisterScreen(false)}
-              onSubmitStudentRegistration={handleSelfRegisterStudent}
-              onCheckStudentPhoneExists={handleCheckStudentPhoneExists}
-            />
+            portalViewMode === 'mushaf' ? (
+              <MushafTajweedView />
+            ) : (
+              <StudentPortalView
+                students={students}
+                teachers={teachers}
+                halaqat={halaqat}
+                schedules={schedules}
+                attendance={attendance}
+                exams={exams}
+                homeworks={homeworks}
+                settings={settings}
+                loggedStudentId={loggedStudentId}
+                onLoginStudent={(studentId) => setLoggedStudentId(studentId)}
+                onLogoutStudent={() => setLoggedStudentId('')}
+                onOpenCertificate={(st, cert) => setCertModalState({ student: st, cert })}
+                showRegisterView={showStudentRegisterScreen}
+                onOpenStudentRegister={() => setShowStudentRegisterScreen(true)}
+                onCloseRegisterView={() => setShowStudentRegisterScreen(false)}
+                onSubmitStudentRegistration={handleSelfRegisterStudent}
+                onCheckStudentPhoneExists={handleCheckStudentPhoneExists}
+              />
+            )
           )}
 
-          {/* ROLE 3: TEACHER PORTAL (Today's Sessions + Exams & Grades + Homeworks + Curriculum Library) */}
+          {/* ROLE 3: TEACHER PORTAL */}
           {appRole === 'teacher' && (
-            <TeacherPortalView
-              teachers={teachers}
-              students={students}
-              schedules={schedules}
-              halaqat={halaqat}
-              attendance={attendance}
-              teacherRatings={teacherRatings}
-              exams={exams}
-              homeworks={homeworks}
-              settings={settings}
-              selectedTeacherId={selectedPortalTeacherId}
-              onSelectTeacher={setSelectedPortalTeacherId}
-              onMarkAttendance={handleMarkAttendance}
-              onAddStar={handleAddStar}
-              onSaveExam={handleSaveExam}
-              onDeleteExam={handleDeleteExam}
-              onSaveHomework={handleSaveHomework}
-              onDeleteHomework={handleDeleteHomework}
-              lockedToTeacher={isTeacherSessionLocked}
-              adminPreviewingTeacher={adminPreviewingTeacher}
-              onExitAdminPreview={handleExitAdminPreview}
-            />
+            portalViewMode === 'mushaf' ? (
+              <MushafTajweedView />
+            ) : (
+              <TeacherPortalView
+                teachers={teachers}
+                students={students}
+                schedules={schedules}
+                halaqat={halaqat}
+                attendance={attendance}
+                teacherRatings={teacherRatings}
+                exams={exams}
+                homeworks={homeworks}
+                settings={settings}
+                selectedTeacherId={selectedPortalTeacherId}
+                onSelectTeacher={setSelectedPortalTeacherId}
+                onMarkAttendance={handleMarkAttendance}
+                onAddStar={handleAddStar}
+                onSaveExam={handleSaveExam}
+                onDeleteExam={handleDeleteExam}
+                onSaveHomework={handleSaveHomework}
+                onDeleteHomework={handleDeleteHomework}
+                lockedToTeacher={isTeacherSessionLocked}
+                adminPreviewingTeacher={adminPreviewingTeacher}
+                onExitAdminPreview={handleExitAdminPreview}
+              />
+            )
           )}
 
           {/* ROLE 4: PARENT PORTAL (Phone Number Only) */}
           {appRole === 'parent' && (
-            <ParentPortalView
-              students={students}
-              teachers={teachers}
-              attendance={attendance}
-              payments={payments}
-              exams={exams}
-              homeworks={homeworks}
-              teacherRatings={teacherRatings}
-              settings={settings}
-              loggedParentPhone={loggedParentPhone}
-              onLoginParent={(phone) => setLoggedParentPhone(phone)}
-              onLogoutParent={() => setLoggedParentPhone('')}
-              onSubmitTeacherRating={handleSubmitTeacherRating}
-              onOpenCertificate={(st, cert) => setCertModalState({ student: st, cert })}
-              onViewReceipt={(pay) => setActiveReceipt(pay)}
-            />
+            portalViewMode === 'mushaf' ? (
+              <MushafTajweedView />
+            ) : (
+              <ParentPortalView
+                students={students}
+                teachers={teachers}
+                attendance={attendance}
+                payments={payments}
+                exams={exams}
+                homeworks={homeworks}
+                teacherRatings={teacherRatings}
+                settings={settings}
+                loggedParentPhone={loggedParentPhone}
+                onLoginParent={(phone) => setLoggedParentPhone(phone)}
+                onLogoutParent={() => setLoggedParentPhone('')}
+                onSubmitTeacherRating={handleSubmitTeacherRating}
+                onOpenCertificate={(st, cert) => setCertModalState({ student: st, cert })}
+                onViewReceipt={(pay) => setActiveReceipt(pay)}
+              />
+            )
           )}
         </main>
       </div>
@@ -3318,12 +3669,7 @@ export default function App() {
       />
 
       {/* Trial Lesson Modal */}
-      <TrialLessonModal
-        isOpen={isTrialModalOpen}
-        onClose={() => setIsTrialModalOpen(false)}
-        onSubmit={handleSaveTrialLesson}
-        managerWhatsApp={settings.managerWhatsApp}
-      />
+      {trialModalElement}
 
       {/* Receipt Modal (Print & PDF/PNG Blob Download) */}
       <ReceiptModal

@@ -6,6 +6,7 @@ import {
   Users,
   BookOpen,
   BookMarked,
+  BookOpenCheck,
   CalendarCheck,
   FileCheck2,
   Sparkles,
@@ -18,17 +19,22 @@ import {
   ChevronDown,
   ChevronUp,
   X,
+  ShieldCheck,
+  Share2,
 } from 'lucide-react';
 import { AcademyLogo } from './AcademyLogo';
-import { AcademySettings } from '../types';
+import { AcademySettings, AppRole } from '../types';
 import { AdminTab } from './Header';
 import { ALL_GRADES_LIST } from '../data/curricula';
 
 interface AdminSidebarProps {
+  appRole?: AppRole;
   isOpen: boolean;
   onClose: () => void;
   currentTab: AdminTab;
   onTabChange: (tab: AdminTab) => void;
+  portalViewMode?: 'portal' | 'mushaf';
+  onSelectPortalView?: (mode: 'portal' | 'mushaf') => void;
   selectedGradeId: string | null;
   onSelectGradeId: (gradeId: string | null) => void;
   settings: AcademySettings;
@@ -45,10 +51,13 @@ interface AdminSidebarProps {
 }
 
 export const AdminSidebar: React.FC<AdminSidebarProps> = ({
+  appRole = 'admin',
   isOpen,
   onClose,
   currentTab,
   onTabChange,
+  portalViewMode = 'portal',
+  onSelectPortalView,
   selectedGradeId,
   onSelectGradeId,
   settings,
@@ -110,6 +119,7 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
       badgeTone: 'amber',
     },
     { id: 'reports', label: 'التقارير المالية', icon: BarChart3 },
+    { id: 'previewSettings', label: 'إعدادات المعاينة', icon: Share2 },
     { id: 'settings', label: 'الإعدادات', icon: Settings },
   ];
 
@@ -160,6 +170,20 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
     );
   };
 
+  const portalLabel =
+    appRole === 'teacher'
+      ? 'بوابة المعلم'
+      : appRole === 'student'
+      ? 'بوابة الطالب'
+      : 'بوابة ولي الأمر';
+
+  const PortalIcon =
+    appRole === 'teacher'
+      ? GraduationCap
+      : appRole === 'student'
+      ? BookOpen
+      : ShieldCheck;
+
   return (
     <>
       {/* Backdrop Overlay on Mobile/Tablet when Slide-Over Sidebar is Open */}
@@ -187,10 +211,10 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
               <AcademyLogo logoUrl={settings.logoDataUrl} size="md" />
               <div className="min-w-0">
                 <h2 className="text-sm font-extrabold text-[#fffdf5] leading-snug truncate">
-                  أكاديمية الفرقان العالمية
+                  {settings.academyName || 'أكاديمية الفرقان العالمية'}
                 </h2>
                 <p className="text-[11px] font-bold text-[#e5c76b] truncate">
-                  الشيخ عبد المجيد مسعد
+                  {appRole === 'admin' ? 'الشيخ عبد المجيد مسعد' : portalLabel}
                 </p>
               </div>
             </div>
@@ -205,166 +229,238 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
             </button>
           </div>
 
-          {/* Navigation List */}
-          <nav className="flex-1 overflow-y-auto p-3 space-y-1">
-            {topItems.map(renderNavItem)}
+          {appRole === 'admin' ? (
+            <>
+              {/* Admin Navigation List */}
+              <nav className="flex-1 overflow-y-auto p-3 space-y-1">
+                {topItems.map(renderNavItem)}
 
-            {/* المناهج — Directly after الطلاب inside the same Sidebar */}
-            <div className="space-y-1">
-              <button
-                type="button"
-                onClick={() => setIsCurriculaExpanded((prev) => !prev)}
-                className={`w-full flex items-center justify-between gap-2 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition cursor-pointer ${
-                  currentTab === 'curricula'
-                    ? 'bg-[#fffdf5] text-[#0a4d2e] border-2 border-[#c9a227] shadow-md'
-                    : 'text-slate-100 hover:bg-[#0d5936] hover:text-[#fffdf5] border border-transparent'
-                }`}
-              >
-                <span className="flex items-center gap-2.5 min-w-0">
-                  <BookMarked
-                    className={`w-4 h-4 shrink-0 ${
-                      currentTab === 'curricula' ? 'text-[#c9a227]' : 'text-[#e5c76b]'
+                {/* المناهج — Directly after الطلاب */}
+                <div className="space-y-1">
+                  <button
+                    type="button"
+                    onClick={() => setIsCurriculaExpanded((prev) => !prev)}
+                    className={`w-full flex items-center justify-between gap-2 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition cursor-pointer ${
+                      currentTab === 'curricula'
+                        ? 'bg-[#fffdf5] text-[#0a4d2e] border-2 border-[#c9a227] shadow-md'
+                        : 'text-slate-100 hover:bg-[#0d5936] hover:text-[#fffdf5] border border-transparent'
                     }`}
-                  />
-                  <span className="truncate">المناهج</span>
-                </span>
-                {isCurriculaExpanded ? (
-                  <ChevronUp
-                    className={`w-4 h-4 shrink-0 ${
-                      currentTab === 'curricula' ? 'text-[#0a4d2e]' : 'text-[#e5c76b]'
-                    }`}
-                  />
-                ) : (
-                  <ChevronDown
-                    className={`w-4 h-4 shrink-0 ${
-                      currentTab === 'curricula' ? 'text-[#0a4d2e]' : 'text-[#e5c76b]'
-                    }`}
-                  />
-                )}
-              </button>
-
-              {isCurriculaExpanded && (
-                <div className="mr-3 pr-2.5 border-r-2 border-[#c9a227]/45 space-y-1 py-1">
-                  {ALL_GRADES_LIST.map((grade) => {
-                    const isGradeActive =
-                      currentTab === 'curricula' && selectedGradeId === grade.id;
-                    return (
-                      <button
-                        key={grade.id}
-                        type="button"
-                        onClick={() => {
-                          onSelectGradeId(grade.id);
-                          onTabChange('curricula');
-                          onClose();
-                        }}
-                        className={`w-full text-right flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-xs font-bold transition cursor-pointer ${
-                          isGradeActive
-                            ? 'bg-[#c9a227] text-[#07241B] shadow-sm font-extrabold'
-                            : 'text-slate-200 hover:bg-[#0d5936] hover:text-[#fffdf5]'
+                  >
+                    <span className="flex items-center gap-2.5 min-w-0">
+                      <BookMarked
+                        className={`w-4 h-4 shrink-0 ${
+                          currentTab === 'curricula' ? 'text-[#c9a227]' : 'text-[#e5c76b]'
                         }`}
-                      >
-                        <span className="truncate">{grade.title}</span>
-                      </button>
-                    );
-                  })}
+                      />
+                      <span className="truncate">المناهج</span>
+                    </span>
+                    {isCurriculaExpanded ? (
+                      <ChevronUp
+                        className={`w-4 h-4 shrink-0 ${
+                          currentTab === 'curricula' ? 'text-[#0a4d2e]' : 'text-[#e5c76b]'
+                        }`}
+                      />
+                    ) : (
+                      <ChevronDown
+                        className={`w-4 h-4 shrink-0 ${
+                          currentTab === 'curricula' ? 'text-[#0a4d2e]' : 'text-[#e5c76b]'
+                        }`}
+                      />
+                    )}
+                  </button>
+
+                  {isCurriculaExpanded && (
+                    <div className="mr-3 pr-2.5 border-r-2 border-[#c9a227]/45 space-y-1 py-1">
+                      {ALL_GRADES_LIST.map((grade) => {
+                        const isGradeActive =
+                          currentTab === 'curricula' && selectedGradeId === grade.id;
+                        return (
+                          <button
+                            key={grade.id}
+                            type="button"
+                            onClick={() => {
+                              onSelectGradeId(grade.id);
+                              onTabChange('curricula');
+                              onClose();
+                            }}
+                            className={`w-full text-right flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-xs font-bold transition cursor-pointer ${
+                              isGradeActive
+                                ? 'bg-[#c9a227] text-[#07241B] shadow-sm font-extrabold'
+                                : 'text-slate-200 hover:bg-[#0d5936] hover:text-[#fffdf5]'
+                            }`}
+                          >
+                            <span className="truncate">{grade.title}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
 
-            {bottomNavItems.map(renderNavItem)}
-          </nav>
+                {/* المصحف المجود — Directly after المناهج */}
+                {renderNavItem({
+                  id: 'mushaf',
+                  label: 'المصحف المجود',
+                  icon: BookOpenCheck,
+                })}
 
-          {/* Bottom Utilities (Includes سلة المحذوفات) */}
-          <div className="p-3 border-t border-[#c9a227]/30 space-y-1.5 bg-[#062E1C]">
-            {onOpenTrialModal && (
-              <button
-                type="button"
-                onClick={() => {
-                  onOpenTrialModal();
-                  onClose();
-                }}
-                className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-[#c9a227]/15 hover:bg-[#c9a227]/25 border border-[#c9a227]/40 text-[#F3E5AB] text-xs font-extrabold transition cursor-pointer"
-              >
-                <span className="flex items-center gap-2">
-                  <Sparkles className="w-4 h-4 text-[#c9a227]" />
-                  <span>حجز حصة تجريبية</span>
-                </span>
-              </button>
-            )}
+                {bottomNavItems.map(renderNavItem)}
+              </nav>
 
-            <button
-              type="button"
-              onClick={() => {
-                onOpenTrashBin();
-                onClose();
-              }}
-              className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-200 text-xs font-bold transition cursor-pointer"
-            >
-              <span className="flex items-center gap-2">
-                <Trash2 className="w-4 h-4 text-amber-300" />
-                <span>سلة المحذوفات (30 يوم)</span>
-              </span>
-              {trashCount > 0 && (
-                <span className="px-2 py-0.5 rounded-full bg-amber-400 text-[#07241B] text-[11px] font-extrabold tabular-nums">
-                  {trashCount}
-                </span>
-              )}
-            </button>
+              {/* Admin Bottom Utilities */}
+              <div className="p-3 border-t border-[#c9a227]/30 space-y-1.5 bg-[#062E1C]">
+                {onOpenTrialModal && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onOpenTrialModal();
+                      onClose();
+                    }}
+                    className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-[#c9a227]/15 hover:bg-[#c9a227]/25 border border-[#c9a227]/40 text-[#F3E5AB] text-xs font-extrabold transition cursor-pointer"
+                  >
+                    <span className="flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-[#c9a227]" />
+                      <span>حجز حصة تجريبية</span>
+                    </span>
+                  </button>
+                )}
 
-            <button
-              type="button"
-              onClick={() => {
-                onOpenFirebaseStatus();
-                onClose();
-              }}
-              className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-200 text-xs font-bold transition cursor-pointer"
-            >
-              <span className="flex items-center gap-2">
-                <Database className="w-4 h-4 text-[#c9a227]" />
-                <span>حالة Firebase</span>
-              </span>
-              <span
-                className={`text-[11px] font-bold ${
-                  firebaseConnected ? 'text-emerald-300' : 'text-amber-300'
-                }`}
-              >
-                {firebaseConnected ? 'متصل' : 'محلي / جاهز'}
-              </span>
-            </button>
-
-            <div className="grid grid-cols-2 gap-1.5 pt-1">
-              {onCheckUpdate && (
                 <button
                   type="button"
                   onClick={() => {
-                    onCheckUpdate();
+                    onOpenTrashBin();
                     onClose();
                   }}
-                  className={`flex items-center justify-center gap-1 px-2 py-2 rounded-xl text-[11px] font-bold cursor-pointer transition border ${
-                    hasUpdateAvailable
-                      ? 'bg-amber-500/25 text-amber-200 border-amber-400/60'
-                      : 'bg-white/5 hover:bg-white/10 text-[#F3E5AB] border-white/10'
+                  className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-200 text-xs font-bold transition cursor-pointer"
+                >
+                  <span className="flex items-center gap-2">
+                    <Trash2 className="w-4 h-4 text-amber-300" />
+                    <span>سلة المحذوفات (30 يوم)</span>
+                  </span>
+                  {trashCount > 0 && (
+                    <span className="px-2 py-0.5 rounded-full bg-amber-400 text-[#07241B] text-[11px] font-extrabold tabular-nums">
+                      {trashCount}
+                    </span>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    onOpenFirebaseStatus();
+                    onClose();
+                  }}
+                  className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-200 text-xs font-bold transition cursor-pointer"
+                >
+                  <span className="flex items-center gap-2">
+                    <Database className="w-4 h-4 text-[#c9a227]" />
+                    <span>حالة Firebase</span>
+                  </span>
+                  <span
+                    className={`text-[11px] font-bold ${
+                      firebaseConnected ? 'text-emerald-300' : 'text-amber-300'
+                    }`}
+                  >
+                    {firebaseConnected ? 'متصل' : 'محلي / جاهز'}
+                  </span>
+                </button>
+
+                <div className="grid grid-cols-2 gap-1.5 pt-1">
+                  {onCheckUpdate && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onCheckUpdate();
+                        onClose();
+                      }}
+                      className={`flex items-center justify-center gap-1 px-2 py-2 rounded-xl text-[11px] font-bold cursor-pointer transition border ${
+                        hasUpdateAvailable
+                          ? 'bg-amber-500/25 text-amber-200 border-amber-400/60'
+                          : 'bg-white/5 hover:bg-white/10 text-[#F3E5AB] border-white/10'
+                      }`}
+                    >
+                      <RefreshCw className="w-3.5 h-3.5 text-[#c9a227]" />
+                      <span>تحديث</span>
+                    </button>
+                  )}
+                  {onSignOut && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onClose();
+                        onSignOut();
+                      }}
+                      className="flex items-center justify-center gap-1 px-2 py-2 rounded-xl bg-white/5 hover:bg-red-900/40 text-red-200 border border-white/10 text-[11px] font-bold cursor-pointer transition"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                      <span>خروج</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              {/* Non-Admin Accounts Sidebar (Teacher, Student, Parent) — Includes المصحف المجود for Everyone */}
+              <nav className="flex-1 overflow-y-auto p-3 space-y-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onSelectPortalView?.('portal');
+                    onClose();
+                  }}
+                  className={`w-full flex items-center gap-2.5 px-3.5 py-3 rounded-xl text-sm font-bold transition cursor-pointer ${
+                    portalViewMode === 'portal'
+                      ? 'bg-[#fffdf5] text-[#0a4d2e] border-2 border-[#c9a227] shadow-md'
+                      : 'text-slate-100 hover:bg-[#0d5936] hover:text-[#fffdf5] border border-transparent'
                   }`}
                 >
-                  <RefreshCw className="w-3.5 h-3.5 text-[#c9a227]" />
-                  <span>تحديث</span>
+                  <PortalIcon
+                    className={`w-4 h-4 shrink-0 ${
+                      portalViewMode === 'portal' ? 'text-[#c9a227]' : 'text-[#e5c76b]'
+                    }`}
+                  />
+                  <span>{portalLabel}</span>
                 </button>
-              )}
-              {onSignOut && (
+
                 <button
                   type="button"
                   onClick={() => {
+                    onSelectPortalView?.('mushaf');
                     onClose();
-                    onSignOut();
                   }}
-                  className="flex items-center justify-center gap-1 px-2 py-2 rounded-xl bg-white/5 hover:bg-red-900/40 text-red-200 border border-white/10 text-[11px] font-bold cursor-pointer transition"
+                  className={`w-full flex items-center gap-2.5 px-3.5 py-3 rounded-xl text-sm font-bold transition cursor-pointer ${
+                    portalViewMode === 'mushaf'
+                      ? 'bg-[#fffdf5] text-[#0a4d2e] border-2 border-[#c9a227] shadow-md'
+                      : 'text-slate-100 hover:bg-[#0d5936] hover:text-[#fffdf5] border border-transparent'
+                  }`}
                 >
-                  <LogOut className="w-3.5 h-3.5" />
-                  <span>خروج</span>
+                  <BookOpenCheck
+                    className={`w-4 h-4 shrink-0 ${
+                      portalViewMode === 'mushaf' ? 'text-[#c9a227]' : 'text-[#e5c76b]'
+                    }`}
+                  />
+                  <span>المصحف المجود</span>
                 </button>
+              </nav>
+
+              {onSignOut && (
+                <div className="p-3 border-t border-[#c9a227]/30 bg-[#062E1C]">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onClose();
+                      onSignOut();
+                    }}
+                    className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-white/5 hover:bg-red-900/40 text-red-200 border border-white/10 text-xs font-bold cursor-pointer transition"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    <span>تسجيل خروج / العودة</span>
+                  </button>
+                </div>
               )}
-            </div>
-          </div>
+            </>
+          )}
         </div>
       </aside>
     </>

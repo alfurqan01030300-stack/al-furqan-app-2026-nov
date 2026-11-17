@@ -4,7 +4,7 @@
  * so Android Chrome WebAPK minting always builds a full standalone app (no Chrome shortcut badge or letter fallback).
  */
 
-export const PUBLISHED_APP_URL = 'https://al-furqan-app.vercel.app';
+export const PUBLISHED_APP_URL = 'https://al-furqan-app-2026-nov.vercel.app';
 
 export function syncAppIcon(logoDataUrl?: string) {
   try {

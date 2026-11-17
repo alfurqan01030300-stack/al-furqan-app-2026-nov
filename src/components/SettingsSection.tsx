@@ -19,6 +19,7 @@ import {
   LogOut,
   Trash2,
   KeyRound,
+  Share2,
 } from 'lucide-react';
 import { AcademySettings, LinkedGoogleAccount } from '../types';
 import { AcademyLogo } from './AcademyLogo';
@@ -54,6 +55,7 @@ interface SettingsSectionProps {
   userEmail?: string | null;
   linkedGoogle?: LinkedGoogleAccount | null;
   onSignOut?: () => void;
+  onOpenPreviewSettings?: () => void;
 }
 
 function compressBannerImage(file: File): Promise<string> {
@@ -89,6 +91,38 @@ function compressBannerImage(file: File): Promise<string> {
   });
 }
 
+function compressLogoImage(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('تعذر قراءة ملف الصورة.'));
+    reader.onload = (event) => {
+      const dataUrl = event.target?.result as string;
+      const img = new Image();
+      img.onerror = () => resolve(dataUrl);
+      img.onload = () => {
+        const maxSide = 512;
+        const largest = Math.max(img.width, img.height);
+        const scale = largest > maxSide ? maxSide / largest : 1;
+        const targetW = Math.max(1, Math.round(img.width * scale));
+        const targetH = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = targetW;
+        canvas.height = targetH;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(dataUrl);
+          return;
+        }
+        ctx.clearRect(0, 0, targetW, targetH);
+        ctx.drawImage(img, 0, 0, targetW, targetH);
+        resolve(canvas.toDataURL('image/png'));
+      };
+      img.src = dataUrl;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 export const SettingsSection: React.FC<SettingsSectionProps> = ({
   settings,
   onSaveSettings,
@@ -113,11 +147,15 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
   userEmail,
   linkedGoogle,
   onSignOut,
+  onOpenPreviewSettings,
 }) => {
   const [academyName, setAcademyName] = useState(settings.academyName);
   const [logoDataUrl, setLogoDataUrl] = useState(settings.logoDataUrl || '');
   const [managerWhatsApp, setManagerWhatsApp] = useState(settings.managerWhatsApp);
   const [slogan, setSlogan] = useState(settings.slogan || '');
+  const [previewDescription, setPreviewDescription] = useState(
+    settings.previewDescription || settings.slogan || ''
+  );
   const [currency, setCurrency] = useState(settings.currency || 'ر.س');
   const [defaultSessionRate, setDefaultSessionRate] = useState<number>(
     settings.defaultSessionRate ?? 40
@@ -204,8 +242,11 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
   };
 
   useEffect(() => {
+    setAcademyName(settings.academyName);
+    setSlogan(settings.slogan || '');
+    setPreviewDescription(settings.previewDescription || settings.slogan || '');
     setLogoDataUrl(settings.logoDataUrl || '');
-  }, [settings.logoDataUrl]);
+  }, [settings.academyName, settings.slogan, settings.previewDescription, settings.logoDataUrl]);
 
   useEffect(() => {
     if (settings.managerPin) {
@@ -220,12 +261,13 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
       return;
     }
     try {
-      const compressed = await compressBannerImage(file);
+      const compressed = await compressLogoImage(file);
       setLogoDataUrl(compressed);
       syncAppIcon(compressed);
       onSaveSettings({
         ...settings,
         logoDataUrl: compressed,
+        previewUpdatedAt: Date.now(),
       });
     } catch {
       // ignore read failure
@@ -242,6 +284,7 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
     onSaveSettings({
       ...settings,
       logoDataUrl: '',
+      previewUpdatedAt: Date.now(),
     });
   };
 
@@ -264,12 +307,15 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const cleanedPin = managerPin.trim().length >= 4 ? managerPin.trim() : settings.managerPin || '1234';
+    const cleanedDesc = previewDescription.trim() || slogan.trim();
     const updated: AcademySettings = {
       ...settings,
       academyName: academyName.trim() || 'أكاديمية الفرقان الدولية لتحفيظ القرآن الكريم',
       logoDataUrl,
       managerWhatsApp: managerWhatsApp.trim(),
       slogan: slogan.trim(),
+      previewDescription: cleanedDesc,
+      previewUpdatedAt: Date.now(),
       currency: currency.trim() || 'ر.س',
       defaultSessionRate: Number(defaultSessionRate) || 40,
       defaultSubscriptionAmount: Number(defaultSubscriptionAmount) || 250,
@@ -308,16 +354,29 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
   return (
     <div className="space-y-6 animate-fadeIn pb-16">
       {/* Header Banner */}
-      <div className="flex items-center gap-3 bg-[#0B3D2E] border border-[#D4AF37]/35 rounded-2xl p-5 shadow-lg">
-        <div className="w-12 h-12 rounded-2xl bg-[#145A43] border border-[#D4AF37]/50 flex items-center justify-center text-[#D4AF37]">
-          <SettingsIcon className="w-6 h-6" />
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-[#0B3D2E] border border-[#D4AF37]/35 rounded-2xl p-5 shadow-lg">
+        <div className="flex items-center gap-3">
+          <div className="w-12 h-12 rounded-2xl bg-[#145A43] border border-[#D4AF37]/50 flex items-center justify-center text-[#D4AF37]">
+            <SettingsIcon className="w-6 h-6" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold font-amiri text-white">إعدادات الأكاديمية والمالية والهوية</h2>
+            <p className="text-xs text-[#D4AF37]/80">
+              تخصيص الشعار، اسم الأكاديمية، العملة، أسعار الحصص، رقم واتساب الإدارة، والنسخ الاحتياطي
+            </p>
+          </div>
         </div>
-        <div>
-          <h2 className="text-xl font-bold font-amiri text-white">إعدادات الأكاديمية والمالية والهوية</h2>
-          <p className="text-xs text-[#D4AF37]/80">
-            تخصيص الشعار، اسم الأكاديمية، العملة، أسعار الحصص، رقم واتساب الإدارة، والنسخ الاحتياطي
-          </p>
-        </div>
+
+        {onOpenPreviewSettings && (
+          <button
+            type="button"
+            onClick={onOpenPreviewSettings}
+            className="gold-gradient-btn px-4 py-2.5 rounded-xl text-xs sm:text-sm font-extrabold flex items-center gap-2 shadow cursor-pointer transition shrink-0"
+          >
+            <Share2 className="w-4 h-4 text-[#07241B]" />
+            <span>إعدادات المعاينة (واتساب وفيسبوك)</span>
+          </button>
+        )}
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
@@ -573,6 +632,18 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
                 type="text"
                 value={slogan}
                 onChange={(e) => setSlogan(e.target.value)}
+                className="w-full bg-[#07241B] border border-[#D4AF37]/30 rounded-xl px-3.5 py-2.5 text-white focus:outline-none focus:border-[#D4AF37]"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-[#F3E5AB] mb-1.5">
+                وصف معاينة الرابط (يظهر في واتساب وفيسبوك)
+              </label>
+              <textarea
+                rows={2}
+                value={previewDescription}
+                onChange={(e) => setPreviewDescription(e.target.value)}
                 className="w-full bg-[#07241B] border border-[#D4AF37]/30 rounded-xl px-3.5 py-2.5 text-white focus:outline-none focus:border-[#D4AF37]"
               />
             </div>

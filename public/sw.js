@@ -85,7 +85,9 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
 
-  // Always bypass cache for version manifest and service worker script itself
+  // Never intercept or cache API endpoints, version manifest, or SW script
+  if (url.pathname.startsWith('/api/')) return;
+
   if (url.pathname === '/version.json' || url.pathname === '/sw.js') {
     event.respondWith(
       fetch(event.request, { cache: 'no-store' }).catch(
@@ -95,7 +97,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Navigation requests (home page & SPA routes): Network-first with guaranteed cached offline shell fallback
+  // Navigation requests (home page & SPA routes): Network-first bypassing browser HTTP cache
   const isNavigation =
     event.request.mode === 'navigate' ||
     url.pathname === '/' ||
@@ -103,7 +105,7 @@ self.addEventListener('fetch', (event) => {
 
   if (isNavigation) {
     event.respondWith(
-      fetch(event.request, { cache: 'no-store' })
+      fetch(event.request, { cache: 'no-cache' })
         .then((response) => {
           if (response && response.ok) {
             const copyForReq = response.clone();
@@ -121,7 +123,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Code bundles & Vite modules: Network-first with offline cache fallback so offline reload renders full UI
+  // Code bundles & Vite modules: Network-first with cache: 'no-cache' so mobile browsers always get fresh builds
   const isCodeOrModule =
     url.pathname.startsWith('/assets/') ||
     url.pathname.startsWith('/src/') ||
@@ -134,7 +136,7 @@ self.addEventListener('fetch', (event) => {
 
   if (isCodeOrModule) {
     event.respondWith(
-      fetch(event.request)
+      fetch(event.request, { cache: 'no-cache' })
         .then((response) => {
           if (response && response.ok) {
             const copy = response.clone();
@@ -150,10 +152,10 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Static assets (manifest, icons, fonts, images): Cache-first with background refresh
+  // Static assets (manifest, icons, fonts, images): Network-fresh background update
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
-      const fetchPromise = fetch(event.request)
+      const fetchPromise = fetch(event.request, { cache: 'no-cache' })
         .then((networkResponse) => {
           if (networkResponse && networkResponse.ok) {
             const copy = networkResponse.clone();

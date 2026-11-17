@@ -79,6 +79,7 @@ export const DEFAULT_SETTINGS: AcademySettings = {
   managerPin: '1234',
   managerPinConfigured: false,
   slogan: 'تعليم القرآن الكريم وتجويده عن بعد بأعلى معايير الإتقان',
+  previewDescription: 'نظام الإدارة والمتابعة الشامل لتحفيظ القرآن الكريم',
   email: '',
   address: '',
   currency: 'ر.س',

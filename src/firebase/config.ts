@@ -20,7 +20,7 @@ import {
   testFirebaseConnection,
 } from '../firebase.js';
 
-export const OFFICIAL_LIVE_URL = 'https://al-furqan-app.vercel.app';
+export const OFFICIAL_LIVE_URL = 'https://al-furqan-app-2026-nov.vercel.app';
 
 export const app = jsApp as FirebaseApp | null;
 export const db = jsDb as Firestore | null;

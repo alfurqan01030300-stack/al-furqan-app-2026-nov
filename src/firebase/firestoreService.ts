@@ -1716,6 +1716,74 @@ export async function savePublicAcademyLogo(
   }
 }
 
+export interface PublicLinkPreviewData {
+  academyName: string;
+  description: string;
+  logoDataUrl: string;
+  updatedAt: number;
+}
+
+export function subscribePublicLinkPreview(
+  onData: (data: PublicLinkPreviewData, exists: boolean) => void
+): Unsubscribe {
+  if (!db) return () => {};
+  try {
+    return onSnapshot(
+      doc(db, 'publicConfig', 'linkPreview'),
+      { includeMetadataChanges: true },
+      (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          onData(
+            {
+              academyName: typeof data.academyName === 'string' ? data.academyName : '',
+              description: typeof data.description === 'string' ? data.description : '',
+              logoDataUrl: typeof data.logoDataUrl === 'string' ? data.logoDataUrl : '',
+              updatedAt: typeof data.updatedAt === 'number' ? data.updatedAt : 0,
+            },
+            true
+          );
+        } else {
+          onData({ academyName: '', description: '', logoDataUrl: '', updatedAt: 0 }, false);
+        }
+      },
+      (error) => {
+        handleFirestoreError(error, OperationType.GET, 'publicConfig/linkPreview');
+      }
+    );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, 'publicConfig/linkPreview');
+    return () => {};
+  }
+}
+
+export async function savePublicLinkPreview(
+  uid: string,
+  preview: PublicLinkPreviewData
+): Promise<{ publicSaved: boolean; permissionDenied: boolean }> {
+  assertAuthenticatedUid(uid);
+  const path = 'publicConfig/linkPreview';
+  try {
+    await setDoc(
+      doc(db!, 'publicConfig', 'linkPreview'),
+      {
+        academyName: preview.academyName,
+        description: preview.description,
+        logoDataUrl: preview.logoDataUrl,
+        updatedAt: preview.updatedAt || Date.now(),
+        updatedBy: uid,
+      },
+      { merge: true }
+    );
+    return { publicSaved: true, permissionDenied: false };
+  } catch (error: any) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+    const msg = error?.message || '';
+    const isPerm = error?.code === 'permission-denied' || msg.includes('permission-denied');
+    return { publicSaved: false, permissionDenied: isPerm };
+  }
+}
+
 // ---------------- Trial Lessons Realtime Sync (`trialLessons`) ----------------
 export function subscribeTrialLessons(
   uid: string,

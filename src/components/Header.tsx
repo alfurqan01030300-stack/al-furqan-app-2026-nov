@@ -18,11 +18,13 @@ export type AdminTab =
   | 'teachers'
   | 'students'
   | 'curricula'
+  | 'mushaf'
   | 'halaqat'
   | 'attendance'
   | 'studentReports'
   | 'trialLessons'
   | 'reports'
+  | 'previewSettings'
   | 'settings';
 
 const TAB_TITLES: Record<AdminTab, string> = {
@@ -31,11 +33,13 @@ const TAB_TITLES: Record<AdminTab, string> = {
   teachers: 'هيئة التدريس والرواتب',
   students: 'إدارة الطلاب',
   curricula: 'المناهج الدراسية',
+  mushaf: 'المصحف المجود',
   halaqat: 'الحلقات والمجموعات',
   attendance: 'سجل الحضور والغياب',
   studentReports: 'الدرجات وتقرير الطالب',
   trialLessons: 'طلبات الحصص التجريبية',
   reports: 'التقارير المالية',
+  previewSettings: 'إعدادات المعاينة',
   settings: 'إعدادات الأكاديمية',
 };
 
