@@ -60,7 +60,11 @@ interface StudentPortalViewProps {
   onLoginStudent: (studentId: string) => void;
   onLogoutStudent: () => void;
   onOpenCertificate: (student: Student, cert?: CertificateRecord) => void;
-  onLookupRemoteByPhone?: (phone: string) => Promise<PublicParentSnapshot | null>;
+  onLookupRemoteByPhone?: (phone: string) => Promise<
+    | (PublicParentSnapshot & { allMatchedStudents?: Student[]; error?: string })
+    | { error: string; student?: undefined; allMatchedStudents?: undefined }
+    | null
+  >;
   onBack?: () => void;
   showRegisterView?: boolean;
   onOpenStudentRegister?: () => void;
@@ -154,18 +158,26 @@ export const StudentPortalView: React.FC<StudentPortalViewProps> = ({
       }
     }
 
+    let remoteErrorMsg = '';
     if (found.length === 0 && onLookupRemoteByPhone) {
       const remoteSnap = await onLookupRemoteByPhone(norm).catch(() => null);
-      if (remoteSnap?.student) {
+      if (remoteSnap && 'error' in remoteSnap && remoteSnap.error && !remoteSnap.student) {
+        remoteErrorMsg = remoteSnap.error;
+      } else if (remoteSnap?.student) {
         setRemoteFallbackData(remoteSnap);
-        found = [remoteSnap.student];
+        found =
+          remoteSnap.allMatchedStudents && remoteSnap.allMatchedStudents.length > 0
+            ? remoteSnap.allMatchedStudents
+            : [remoteSnap.student];
       }
     }
 
     setSearching(false);
 
     if (found.length === 0) {
-      setLoginError('هذا الرقم غير مسجل في بيانات الطلاب، يمكنك التقديم الآن كطالب جديد.');
+      setLoginError(
+        remoteErrorMsg || 'هذا الرقم غير مسجل في بيانات الطلاب، يمكنك التقديم الآن كطالب جديد.'
+      );
       return;
     }
 

@@ -166,12 +166,14 @@ export function normalizePhoneAuth(phone: string): string {
     cleaned = cleaned.slice(3);
   } else if (cleaned.startsWith('0020')) {
     cleaned = cleaned.slice(4);
-  } else if (cleaned.startsWith('02')) {
+  } else if (cleaned.startsWith('020')) {
     cleaned = cleaned.slice(2);
   } else if (cleaned.startsWith('20') && cleaned.length >= 11) {
     cleaned = cleaned.slice(2);
   } else if (cleaned.startsWith('+')) {
     cleaned = cleaned.slice(1);
+  } else if (cleaned.startsWith('00') && cleaned.length >= 11) {
+    cleaned = cleaned.slice(2);
   }
 
   let digits = cleaned.replace(/\D/g, '');

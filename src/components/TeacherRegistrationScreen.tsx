@@ -27,6 +27,8 @@ import {
 } from '../types';
 import { normalizePhoneAuth } from '../utils/authStorage';
 import { compressImageToDataUrl } from '../firebase/storageService';
+import { isSupabaseConfigured, SUPABASE_PROJECT_URL } from '../supabase/client';
+import { sanitizeUserFacingError } from '../supabase/registrationService';
 
 export interface TeacherSelfRegistrationPayload {
   name: string;
@@ -96,6 +98,16 @@ export const TeacherRegistrationScreen: React.FC<TeacherRegistrationScreenProps>
   const [submittedPending, setSubmittedPending] = useState(false);
 
   const avatarInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    console.log('[TeacherRegistrationScreen] Mounted. Target Supabase URL:', SUPABASE_PROJECT_URL);
+    if (!isSupabaseConfigured()) {
+      console.error('Missing env vars', {
+        component: 'TeacherRegistrationScreen',
+        hasSupabaseUrl: Boolean(SUPABASE_PROJECT_URL),
+      });
+    }
+  }, []);
 
   const singleStageGrades = useMemo(() => getGradesForStage(singleStage), [singleStage]);
 
@@ -168,23 +180,28 @@ export const TeacherRegistrationScreen: React.FC<TeacherRegistrationScreenProps>
     try {
       const compressed = await compressImageToDataUrl(file, 480, 0.8);
       setAvatarUrl(compressed);
-    } catch {
-      // ignore optional image failure
+    } catch (err) {
+      // Optional image compression should never block the registration form
+      console.warn('Optional avatar upload warning:', err);
     } finally {
       if (avatarInputRef.current) avatarInputRef.current.value = '';
     }
   };
 
   const handlePhoneBlur = async () => {
-    const norm = normalizePhoneAuth(phone);
-    if (norm.length >= 9) {
-      const exists = await onCheckPhoneExists(norm).catch(() => false);
-      if (exists) {
-        setDuplicateNotice(true);
-        setErrorMsg('رقم التليفون ده متسجل قبل كده — تقدر تدخل برقمك مباشرة.');
-      } else {
-        setDuplicateNotice(false);
+    try {
+      const norm = normalizePhoneAuth(phone);
+      if (norm.length >= 9) {
+        const exists = await onCheckPhoneExists(norm).catch(() => false);
+        if (exists) {
+          setDuplicateNotice(true);
+          setErrorMsg('رقم التليفون ده متسجل قبل كده — تقدر تدخل برقمك مباشرة.');
+        } else {
+          setDuplicateNotice(false);
+        }
       }
+    } catch (err) {
+      console.warn('Optional phone check skipped:', err);
     }
   };
 
@@ -278,7 +295,9 @@ export const TeacherRegistrationScreen: React.FC<TeacherRegistrationScreenProps>
           );
           return;
         }
-        setErrorMsg(res.error || 'تعذر حفظ البيانات، يرجى المحاولة مرة أخرى.');
+        setErrorMsg(
+          sanitizeUserFacingError(res.error, 'تعذر حفظ البيانات، يرجى المحاولة مرة أخرى.')
+        );
         return;
       }
 
@@ -286,7 +305,8 @@ export const TeacherRegistrationScreen: React.FC<TeacherRegistrationScreenProps>
         setSubmittedPending(true);
       }
     } catch (err: any) {
-      setErrorMsg(err?.message || 'حدث خطأ أثناء حفظ البيانات. حاول مرة أخرى.');
+      console.error('[TeacherRegistrationScreen] Submit error:', err);
+      setErrorMsg(sanitizeUserFacingError(err, 'حدث خطأ في الاتصال بالسيرفر، حاول مرة أخرى'));
     } finally {
       setSubmitting(false);
     }

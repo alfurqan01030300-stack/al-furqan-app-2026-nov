@@ -87,10 +87,17 @@ export function syncDocumentPreviewMeta(settings: Partial<AcademySettings>): voi
   syncAppIcon(settings.logoDataUrl || '');
 }
 
+function shouldUsePreviewApi(): boolean {
+  if (typeof fetch === 'undefined' || typeof window === 'undefined') return false;
+  const host = (window.location.hostname || '').toLowerCase();
+  if (host.endsWith('.vercel.app')) return false;
+  return true;
+}
+
 export async function pushPreviewSettingsToServer(
   payload: PreviewSettingsDTO
 ): Promise<PreviewSettingsDTO | null> {
-  if (typeof fetch === 'undefined') return null;
+  if (!shouldUsePreviewApi()) return null;
   try {
     const res = await fetch('/api/preview-settings', {
       method: 'POST',
@@ -98,6 +105,8 @@ export async function pushPreviewSettingsToServer(
       body: JSON.stringify(payload),
     });
     if (!res.ok) return null;
+    const ct = res.headers.get('content-type') || '';
+    if (!ct.includes('application/json')) return null;
     const data = await res.json();
     return data?.settings || payload;
   } catch {
@@ -106,10 +115,12 @@ export async function pushPreviewSettingsToServer(
 }
 
 export async function fetchPreviewSettingsFromServer(): Promise<PreviewSettingsDTO | null> {
-  if (typeof fetch === 'undefined') return null;
+  if (!shouldUsePreviewApi()) return null;
   try {
     const res = await fetch('/api/preview-settings', { cache: 'no-store' });
     if (!res.ok) return null;
+    const ct = res.headers.get('content-type') || '';
+    if (!ct.includes('application/json')) return null;
     const data = await res.json();
     if (!data || typeof data !== 'object') return null;
     return {

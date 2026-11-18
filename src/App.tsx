@@ -205,9 +205,14 @@ import {
   checkTeacherPhoneInSupabase,
   fetchStudentsFromSupabase,
   fetchTeachersFromSupabase,
+  findStudentsInSupabaseByPhone,
+  findTeacherInSupabaseByPhone,
   registerStudentAndParentInSupabase,
   registerTeacherInSupabase,
+  sanitizeUserFacingError,
   updateTeacherStatusInSupabase,
+  upsertStudentInSupabase,
+  upsertTeacherInSupabase,
 } from './supabase/registrationService';
 
 function buildStudentExamResults(studentId: string, examsList: Exam[]): StudentExamResult[] {
@@ -454,13 +459,19 @@ export default function App() {
   // Sync Manager Students & Teachers from Supabase additively (never overwrite or delete existing data)
   useEffect(() => {
     if (!isSupabaseConfigured()) return;
+    if (!appSessionLoggedIn || appRole !== 'admin') return;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
     let cancelled = false;
     Promise.all([fetchStudentsFromSupabase(), fetchTeachersFromSupabase()])
       .then(([sbStudents, sbTeachers]) => {
         if (cancelled) return;
+        const trashEntityIds = new Set(latestBundleRef.current.trash.map((t) => t.entityId));
+        const pendingStudentIds = new Set(latestBundleRef.current.pendingSync.students || []);
+        const pendingTeacherIds = new Set(latestBundleRef.current.pendingSync.teachers || []);
+
         if (sbStudents.length > 0) {
           for (const s of sbStudents) {
-            if (!initialLocalStudentIdsRef.current.has(s.id)) {
+            if (!initialLocalStudentIdsRef.current.has(s.id) && !trashEntityIds.has(s.id)) {
               supabaseOnlyStudentIdsRef.current.add(s.id);
             }
           }
@@ -468,15 +479,43 @@ export default function App() {
             const prevMap = new Map(prev.map((p) => [p.id, p]));
             const merged = new Map(prevMap);
             for (const s of sbStudents) {
+              if (trashEntityIds.has(s.id)) continue;
               const existing = prevMap.get(s.id);
-              merged.set(s.id, existing ? { ...existing, ...s, reports: existing.reports, certificates: existing.certificates, stars: existing.stars, totalStarsEarned: existing.totalStarsEarned, starCyclesCompleted: existing.starCyclesCompleted, completedJuz: existing.completedJuz, currentSurah: existing.currentSurah, notes: existing.notes || s.notes, assignedTeacherId: existing.assignedTeacherId, halaqaId: existing.halaqaId, halaqaName: existing.halaqaName } : s);
+              if (existing && pendingStudentIds.has(s.id)) continue;
+              merged.set(
+                s.id,
+                existing
+                  ? {
+                      ...existing,
+                      ...s,
+                      feeStatus:
+                        existing.feeStatus === 'paid' || s.feeStatus === 'paid'
+                          ? 'paid'
+                          : 'unpaid',
+                      reports: existing.reports,
+                      certificates: existing.certificates,
+                      stars: existing.stars,
+                      totalStarsEarned: existing.totalStarsEarned,
+                      starCyclesCompleted: existing.starCyclesCompleted,
+                      completedJuz: existing.completedJuz,
+                      currentSurah: existing.currentSurah,
+                      notes: existing.notes || s.notes,
+                      assignedTeacherId: existing.assignedTeacherId || s.assignedTeacherId,
+                      halaqaId: existing.halaqaId || s.halaqaId,
+                      halaqaName: existing.halaqaName || s.halaqaName,
+                      subscriptionAmount: existing.subscriptionAmount,
+                      nextPaymentDate: existing.nextPaymentDate,
+                      lastPaymentDate: existing.lastPaymentDate,
+                    }
+                  : s
+              );
             }
             return Array.from(merged.values());
           });
         }
         if (sbTeachers.length > 0) {
           for (const t of sbTeachers) {
-            if (!initialLocalTeacherIdsRef.current.has(t.id)) {
+            if (!initialLocalTeacherIdsRef.current.has(t.id) && !trashEntityIds.has(t.id)) {
               supabaseOnlyTeacherIdsRef.current.add(t.id);
             }
           }
@@ -484,8 +523,23 @@ export default function App() {
             const prevMap = new Map(prev.map((p) => [p.id, p]));
             const merged = new Map(prevMap);
             for (const t of sbTeachers) {
+              if (trashEntityIds.has(t.id)) continue;
               const existing = prevMap.get(t.id);
-              merged.set(t.id, existing ? { ...existing, ...t } : t);
+              if (existing && pendingTeacherIds.has(t.id)) continue;
+              merged.set(
+                t.id,
+                existing
+                  ? {
+                      ...existing,
+                      ...t,
+                      certificates: existing.certificates,
+                      sessionRate: existing.sessionRate ?? t.sessionRate,
+                      notes: existing.notes || t.notes,
+                      password: existing.password || t.password,
+                      passwordHash: existing.passwordHash || t.passwordHash,
+                    }
+                  : t
+              );
             }
             return Array.from(merged.values());
           });
@@ -495,7 +549,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [appSessionLoggedIn, appRole]);
+  }, [appSessionLoggedIn, appRole, entryGateMode]);
 
   // PWA, Connectivity & App Updater Hooks
   const { isInstallable, isInstalled, isIOS, isInAppBrowser, platform, install } = usePWAInstall();
@@ -856,12 +910,15 @@ export default function App() {
     }
 
     let matchedTeacher: Teacher | null = null;
+    let supabaseError: string | undefined;
+
     if (isSupabaseConfigured()) {
-      const sbTeachers = await fetchTeachersFromSupabase().catch(() => []);
-      matchedTeacher =
-        sbTeachers.find(
-          (t) => normalizePhoneAuth(t.normalizedPhone || t.phone) === normalized
-        ) || null;
+      const sbRes = await findTeacherInSupabaseByPhone(normalized).catch(() => ({
+        teacher: null,
+        error: undefined,
+      }));
+      matchedTeacher = sbRes.teacher;
+      supabaseError = sbRes.error;
     }
     if (!matchedTeacher && isFirebaseConfigured()) {
       matchedTeacher = await findTeacherInFirestoreByPhone(normalized).catch(() => null);
@@ -874,6 +931,12 @@ export default function App() {
     }
 
     if (!matchedTeacher) {
+      if (supabaseError) {
+        return {
+          ok: false,
+          error: supabaseError,
+        };
+      }
       return {
         ok: false,
         notRegistered: true,
@@ -896,38 +959,54 @@ export default function App() {
     }
 
     setStoredLastTeacherPhone(normalized);
-    setTeachers((prev) => [
-      matchedTeacher!,
-      ...prev.filter((t) => t.id !== matchedTeacher!.id),
-    ]);
+    if (!initialLocalTeacherIdsRef.current.has(matchedTeacher.id)) {
+      supabaseOnlyTeacherIdsRef.current.add(matchedTeacher.id);
+    }
+    setTeachers((prev) => {
+      const existing = prev.find((t) => t.id === matchedTeacher!.id);
+      const merged: Teacher = existing
+        ? {
+            ...existing,
+            ...matchedTeacher!,
+            certificates: existing.certificates,
+            sessionRate: existing.sessionRate ?? matchedTeacher!.sessionRate,
+            notes: existing.notes || matchedTeacher!.notes,
+            password: existing.password || matchedTeacher!.password,
+            passwordHash: existing.passwordHash || matchedTeacher!.passwordHash,
+          }
+        : matchedTeacher!;
+      return [merged, ...prev.filter((t) => t.id !== matchedTeacher!.id)];
+    });
     setSelectedPortalTeacherId(matchedTeacher.id);
     setAdminPreviewingTeacher(false);
     setPortalViewMode('portal');
     setAppRole('teacher');
     setAppSessionLoggedIn(true);
 
-    fetchTeacherPortalDataFromFirestore(matchedTeacher.id)
-      .then((portalData) => {
-        if (portalData.schedules.length > 0) {
-          setSchedules((prev) => {
-            const ids = new Set(prev.map((s) => s.id));
-            return [...prev, ...portalData.schedules.filter((s) => !ids.has(s.id))];
-          });
-        }
-        if (portalData.students.length > 0) {
-          setStudents((prev) => {
-            const ids = new Set(prev.map((s) => s.id));
-            return [...prev, ...portalData.students.filter((s) => !ids.has(s.id))];
-          });
-        }
-        if (portalData.attendance.length > 0) {
-          setAttendance((prev) => {
-            const ids = new Set(prev.map((a) => a.id));
-            return [...prev, ...portalData.attendance.filter((a) => !ids.has(a.id))];
-          });
-        }
-      })
-      .catch(() => {});
+    if (isFirebaseConfigured() && !isTemporaryPreviewHost()) {
+      fetchTeacherPortalDataFromFirestore(matchedTeacher.id)
+        .then((portalData) => {
+          if (portalData.schedules.length > 0) {
+            setSchedules((prev) => {
+              const ids = new Set(prev.map((s) => s.id));
+              return [...prev, ...portalData.schedules.filter((s) => !ids.has(s.id))];
+            });
+          }
+          if (portalData.students.length > 0) {
+            setStudents((prev) => {
+              const ids = new Set(prev.map((s) => s.id));
+              return [...prev, ...portalData.students.filter((s) => !ids.has(s.id))];
+            });
+          }
+          if (portalData.attendance.length > 0) {
+            setAttendance((prev) => {
+              const ids = new Set(prev.map((a) => a.id));
+              return [...prev, ...portalData.attendance.filter((a) => !ids.has(a.id))];
+            });
+          }
+        })
+        .catch(() => {});
+    }
 
     return { ok: true };
   };
@@ -986,14 +1065,17 @@ export default function App() {
         specialization: subjectsSpec,
       });
     } catch (err: any) {
+      console.error('[App] handleSelfRegisterTeacher error:', err);
       return {
         ok: false,
-        error:
-          err?.message ||
-          'تعذر إرسال الطلب إلى Supabase. تأكد من مفتاح الربط وصلاحيات الجدول.',
+        error: sanitizeUserFacingError(
+          err,
+          'حدث خطأ في الاتصال بالسيرفر، حاول مرة أخرى'
+        ),
       };
     }
 
+    setStoredLastTeacherPhone(normalized);
     return { ok: true, pendingApproval: true };
   };
 
@@ -1057,11 +1139,13 @@ export default function App() {
         registeredDate: todayStr,
       });
     } catch (err: any) {
+      console.error('[App] handleSelfRegisterStudent error:', err);
       return {
         ok: false,
-        error:
-          err?.message ||
-          'تعذر حفظ التسجيل في Supabase. تأكد من مفتاح الربط وصلاحيات جدول students و parents.',
+        error: sanitizeUserFacingError(
+          err,
+          'حدث خطأ في الاتصال بالسيرفر، حاول مرة أخرى'
+        ),
       };
     }
 
@@ -1108,11 +1192,16 @@ export default function App() {
   };
 
   const handleApproveTeacher = (teacherId: string) => {
+    const targetTeacher = teachers.find((t) => t.id === teacherId);
     setTeachers((prev) =>
       prev.map((t) => (t.id === teacherId ? { ...t, status: 'active' } : t))
     );
     if (isSupabaseConfigured()) {
-      updateTeacherStatusInSupabase(teacherId, 'active').catch(() => {});
+      updateTeacherStatusInSupabase(
+        teacherId,
+        'active',
+        targetTeacher?.normalizedPhone || targetTeacher?.phone
+      ).catch(() => {});
     }
     if (isFirebaseConfigured()) {
       updateTeacherStatusInFirestore(teacherId, 'active').catch((err) =>
@@ -1122,11 +1211,16 @@ export default function App() {
   };
 
   const handleRejectTeacher = (teacherId: string) => {
+    const targetTeacher = teachers.find((t) => t.id === teacherId);
     setTeachers((prev) =>
       prev.map((t) => (t.id === teacherId ? { ...t, status: 'rejected' } : t))
     );
     if (isSupabaseConfigured()) {
-      updateTeacherStatusInSupabase(teacherId, 'rejected').catch(() => {});
+      updateTeacherStatusInSupabase(
+        teacherId,
+        'rejected',
+        targetTeacher?.normalizedPhone || targetTeacher?.phone
+      ).catch(() => {});
     }
     if (isFirebaseConfigured()) {
       updateTeacherStatusInFirestore(teacherId, 'rejected').catch((err) =>
@@ -1581,6 +1675,9 @@ export default function App() {
       const updatedStudent: Student = { ...studentToEdit, ...studentData };
       setStudents((prev) => prev.map((s) => (s.id === studentToEdit.id ? updatedStudent : s)));
       syncEntityPending('students', updatedStudent.id, true);
+      if (isSupabaseConfigured()) {
+        upsertStudentInSupabase(updatedStudent).catch(() => {});
+      }
       if (uid && isFirebaseConfigured()) {
         saveStudentToFirestore(uid, updatedStudent)
           .then(() => syncEntityPending('students', updatedStudent.id, false))
@@ -1621,6 +1718,9 @@ export default function App() {
       setStudents((prev) => [newStudent, ...prev]);
       setSelectedStudentId(newStudent.id);
       syncEntityPending('students', newStudent.id, true);
+      if (isSupabaseConfigured()) {
+        upsertStudentInSupabase(newStudent).catch(() => {});
+      }
       if (uid && isFirebaseConfigured()) {
         saveStudentToFirestore(uid, newStudent)
           .then(() => syncEntityPending('students', newStudent.id, false))
@@ -1633,6 +1733,9 @@ export default function App() {
   const handleUpdateStudent = (updatedStudent: Student) => {
     setStudents((prev) => prev.map((s) => (s.id === updatedStudent.id ? updatedStudent : s)));
     syncEntityPending('students', updatedStudent.id, true);
+    if (isSupabaseConfigured()) {
+      upsertStudentInSupabase(updatedStudent).catch(() => {});
+    }
     if (authUser && isFirebaseConfigured()) {
       saveStudentToFirestore(authUser.uid, updatedStudent)
         .then(() => syncEntityPending('students', updatedStudent.id, false))
@@ -1701,6 +1804,9 @@ export default function App() {
     };
     setTeachers((prev) => [newTeacher, ...prev]);
     syncEntityPending('teachers', newTeacher.id, true);
+    if (isSupabaseConfigured()) {
+      upsertTeacherInSupabase(newTeacher).catch(() => {});
+    }
     if (isFirebaseConfigured()) {
       saveTeacherToFirestore(authUser?.uid, newTeacher)
         .then(() => syncEntityPending('teachers', newTeacher.id, false))
@@ -1718,6 +1824,9 @@ export default function App() {
     };
     setTeachers((prev) => prev.map((t) => (t.id === enrichedTeacher.id ? enrichedTeacher : t)));
     syncEntityPending('teachers', enrichedTeacher.id, true);
+    if (isSupabaseConfigured()) {
+      upsertTeacherInSupabase(enrichedTeacher).catch(() => {});
+    }
     if (isFirebaseConfigured()) {
       saveTeacherToFirestore(authUser?.uid, enrichedTeacher)
         .then(() => syncEntityPending('teachers', enrichedTeacher.id, false))
@@ -2622,6 +2731,134 @@ export default function App() {
     );
   }
 
+  // Unified remote lookup (Supabase first, then Firestore public snapshot & student/parent collections)
+  const handleLookupRemoteStudentsByPhone = async (
+    norm: string
+  ): Promise<
+    | (PublicParentSnapshot & { allMatchedStudents?: Student[]; error?: string })
+    | { error: string; student?: undefined; allMatchedStudents?: undefined }
+    | null
+  > => {
+    const mergeMatchedIntoState = (matched: Student[]) => {
+      if (matched.length === 0) return;
+      for (const s of matched) {
+        if (!initialLocalStudentIdsRef.current.has(s.id)) {
+          supabaseOnlyStudentIdsRef.current.add(s.id);
+        }
+      }
+      setStudents((prev) => {
+        const prevMap = new Map(prev.map((p) => [p.id, p]));
+        const nextMap = new Map(prevMap);
+        for (const s of matched) {
+          const existing = prevMap.get(s.id);
+          nextMap.set(
+            s.id,
+            existing
+              ? {
+                  ...existing,
+                  ...s,
+                  feeStatus:
+                    existing.feeStatus === 'paid' || s.feeStatus === 'paid' ? 'paid' : 'unpaid',
+                  reports: existing.reports,
+                  certificates: existing.certificates,
+                  stars: existing.stars,
+                  totalStarsEarned: existing.totalStarsEarned,
+                  starCyclesCompleted: existing.starCyclesCompleted,
+                  completedJuz: existing.completedJuz,
+                  currentSurah: existing.currentSurah,
+                  notes: existing.notes || s.notes,
+                  assignedTeacherId: existing.assignedTeacherId || s.assignedTeacherId,
+                  halaqaId: existing.halaqaId || s.halaqaId,
+                  halaqaName: existing.halaqaName || s.halaqaName,
+                }
+              : s
+          );
+        }
+        return Array.from(nextMap.values());
+      });
+    };
+
+    let sbError: string | undefined;
+    if (isSupabaseConfigured()) {
+      const sbRes = await findStudentsInSupabaseByPhone(norm).catch(() => ({
+        students: [] as Student[],
+        error: undefined,
+      }));
+      sbError = sbRes.error;
+      if (sbRes.students.length > 0) {
+        mergeMatchedIntoState(sbRes.students);
+        const primary = sbRes.students[0];
+        const tObj = teachers.find((t) => t.id === primary.assignedTeacherId);
+        return {
+          student: primary,
+          allMatchedStudents: sbRes.students,
+          teacherName: tObj?.name || '',
+          attendance: attendance.filter((a) => a.studentId === primary.id),
+          payments: payments.filter((p) => p.studentId === primary.id),
+          exams: buildStudentExamResults(primary.id, exams),
+          currency: settings.currency || 'ر.س',
+          academyName: settings.academyName,
+          updatedAt: Date.now(),
+        };
+      }
+    }
+
+    if (isFirebaseConfigured() && !isTemporaryPreviewHost()) {
+      const direct = await fetchPublicParentSnapshot(`phone_${norm}`).catch(() => null);
+      if (direct?.student) {
+        mergeMatchedIntoState([direct.student]);
+        return { ...direct, allMatchedStudents: [direct.student] };
+      }
+      if (norm.length > 9) {
+        const shortMatch = await fetchPublicParentSnapshot(`phone_${norm.slice(-9)}`).catch(
+          () => null
+        );
+        if (shortMatch?.student) {
+          mergeMatchedIntoState([shortMatch.student]);
+          return { ...shortMatch, allMatchedStudents: [shortMatch.student] };
+        }
+      }
+
+      const fsStudent = await findStudentInFirestoreByPhone(norm).catch(() => null);
+      if (fsStudent) {
+        mergeMatchedIntoState([fsStudent]);
+        const tObj = teachers.find((t) => t.id === fsStudent.assignedTeacherId);
+        return {
+          student: fsStudent,
+          allMatchedStudents: [fsStudent],
+          teacherName: tObj?.name || '',
+          attendance: [],
+          payments: [],
+          exams: buildStudentExamResults(fsStudent.id, exams),
+          currency: settings.currency || 'ر.س',
+          academyName: settings.academyName,
+          updatedAt: Date.now(),
+        };
+      }
+
+      const fsParent = await findParentInFirestoreByPhone(norm).catch(() => null);
+      if (fsParent?.studentIds && fsParent.studentIds.length > 0) {
+        const snaps = (
+          await Promise.all(
+            fsParent.studentIds.map((sid) =>
+              fetchPublicParentSnapshot(`student_${sid}`).catch(() => null)
+            )
+          )
+        ).filter((snap): snap is PublicParentSnapshot => Boolean(snap?.student));
+        if (snaps.length > 0) {
+          const allStudents = snaps.map((s) => s.student);
+          mergeMatchedIntoState(allStudents);
+          return { ...snaps[0], allMatchedStudents: allStudents };
+        }
+      }
+    }
+
+    if (sbError) {
+      return { error: sbError };
+    }
+    return null;
+  };
+
   // Mandatory Pre-Login Entry Flow:
   // 1) Direct Parent Link (?parent=<id>): jumps directly to that single child's read-only profile.
   // 2) First Launch Welcome Choice Screen: must choose Parent (ولي أمر) OR Teacher/Management (مدرس / إدارة).
@@ -2767,14 +3004,7 @@ export default function App() {
                 }}
                 onOpenCertificate={(st, cert) => setCertModalState({ student: st, cert })}
                 onViewReceipt={(pay) => setActiveReceipt(pay)}
-                onLookupRemoteByPhone={async (norm) => {
-                  const direct = await fetchPublicParentSnapshot(`phone_${norm}`);
-                  if (direct) return direct;
-                  if (norm.length > 9) {
-                    return await fetchPublicParentSnapshot(`phone_${norm.slice(-9)}`);
-                  }
-                  return null;
-                }}
+                onLookupRemoteByPhone={handleLookupRemoteStudentsByPhone}
                 onBack={
                   directParentChildId
                     ? undefined
@@ -2910,31 +3140,7 @@ export default function App() {
                 onLoginStudent={(studentId) => setLoggedStudentId(studentId)}
                 onLogoutStudent={() => setLoggedStudentId('')}
                 onOpenCertificate={(st, cert) => setCertModalState({ student: st, cert })}
-                onLookupRemoteByPhone={async (norm) => {
-                  const direct = await fetchPublicParentSnapshot(`phone_${norm}`);
-                  if (direct) return direct;
-                  if (norm.length > 9) {
-                    const shortMatch = await fetchPublicParentSnapshot(`phone_${norm.slice(-9)}`);
-                    if (shortMatch) return shortMatch;
-                  }
-                  if (isFirebaseConfigured() && !isTemporaryPreviewHost()) {
-                    const studentMatch = await findStudentInFirestoreByPhone(norm).catch(() => null);
-                    if (studentMatch) {
-                      const tObj = teachers.find((t) => t.id === studentMatch.assignedTeacherId);
-                      return {
-                        student: studentMatch,
-                        teacherName: tObj?.name || '',
-                        attendance: [],
-                        payments: [],
-                        exams: buildStudentExamResults(studentMatch.id, exams),
-                        currency: settings.currency || 'ر.س',
-                        academyName: settings.academyName,
-                        updatedAt: Date.now(),
-                      };
-                    }
-                  }
-                  return null;
-                }}
+                onLookupRemoteByPhone={handleLookupRemoteStudentsByPhone}
                 showRegisterView={showStudentRegisterScreen}
                 onOpenStudentRegister={() => setShowStudentRegisterScreen(true)}
                 onCloseRegisterView={() => setShowStudentRegisterScreen(false)}
@@ -2991,14 +3197,10 @@ export default function App() {
             onSelectTeacher={() => {
               const lastPhone = getStoredLastTeacherPhone();
               setLoginInitialNotice(null);
+              setLoginInitialPhone(lastPhone || '');
+              setTeacherPrefillPhone(lastPhone || '');
+              setShowTeacherRegisterScreen(false);
               setEntryGateMode('teacher_login');
-              if (lastPhone) {
-                setLoginInitialPhone(lastPhone);
-                setShowTeacherRegisterScreen(false);
-              } else {
-                setTeacherPrefillPhone('');
-                setShowTeacherRegisterScreen(true);
-              }
             }}
             onSelectParent={() => setEntryGateMode('parent')}
             onOpenTrialModal={() => setIsTrialModalOpen(true)}
@@ -3067,9 +3269,6 @@ export default function App() {
             onBackToLogin={() => {
               setLoginInitialNotice(null);
               setShowTeacherRegisterScreen(false);
-              if (!getStoredLastTeacherPhone()) {
-                setEntryGateMode('welcome');
-              }
             }}
           />
           <FooterWhatsApp
@@ -3592,6 +3791,7 @@ export default function App() {
                 onLoginStudent={(studentId) => setLoggedStudentId(studentId)}
                 onLogoutStudent={() => setLoggedStudentId('')}
                 onOpenCertificate={(st, cert) => setCertModalState({ student: st, cert })}
+                onLookupRemoteByPhone={handleLookupRemoteStudentsByPhone}
                 showRegisterView={showStudentRegisterScreen}
                 onOpenStudentRegister={() => setShowStudentRegisterScreen(true)}
                 onCloseRegisterView={() => setShowStudentRegisterScreen(false)}
@@ -3651,6 +3851,7 @@ export default function App() {
                 onSubmitTeacherRating={handleSubmitTeacherRating}
                 onOpenCertificate={(st, cert) => setCertModalState({ student: st, cert })}
                 onViewReceipt={(pay) => setActiveReceipt(pay)}
+                onLookupRemoteByPhone={handleLookupRemoteStudentsByPhone}
               />
             )
           )}

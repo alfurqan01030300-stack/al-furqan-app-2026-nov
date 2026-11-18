@@ -20,6 +20,8 @@ import {
 import { EducationStage, EducationSystem, SecondaryTrack, StudyScope } from '../types';
 import { normalizePhoneForMatch } from '../utils/storage';
 
+import { sanitizeUserFacingError } from '../supabase/registrationService';
+
 export interface StudentSelfRegistrationPayload {
   name: string;
   age: number;
@@ -149,10 +151,12 @@ export const StudentRegistrationScreen: React.FC<StudentRegistrationScreenProps>
       });
 
       if (!res.ok) {
-        setErrorMsg(res.error || 'تعذر حفظ بيانات الطالب. يرجى المحاولة مرة أخرى.');
+        setErrorMsg(
+          sanitizeUserFacingError(res.error, 'تعذر حفظ بيانات الطالب. يرجى المحاولة مرة أخرى.')
+        );
       }
-    } catch {
-      setErrorMsg('حدث خطأ أثناء حفظ البيانات. حاول مرة أخرى.');
+    } catch (err) {
+      setErrorMsg(sanitizeUserFacingError(err, 'حدث خطأ في الاتصال بالسيرفر، حاول مرة أخرى'));
     } finally {
       setSubmitting(false);
     }

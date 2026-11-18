@@ -66,7 +66,11 @@ interface ParentPortalViewProps {
   onOpenCertificate: (student: Student, cert?: CertificateRecord) => void;
   onViewReceipt: (payment: PaymentRecord) => void;
   onBack?: () => void;
-  onLookupRemoteByPhone?: (phone: string) => Promise<PublicParentSnapshot | null>;
+  onLookupRemoteByPhone?: (phone: string) => Promise<
+    | (PublicParentSnapshot & { allMatchedStudents?: Student[]; error?: string })
+    | { error: string; student?: undefined; allMatchedStudents?: undefined }
+    | null
+  >;
   isDirectLink?: boolean;
   directChildId?: string;
 }
@@ -197,10 +201,16 @@ export const ParentPortalView: React.FC<ParentPortalViewProps> = ({
       }
     }
 
+    let remoteErrorMsg = '';
     if (foundChildren.length === 0 && onLookupRemoteByPhone) {
       const fetched = await onLookupRemoteByPhone(norm).catch(() => null);
-      if (fetched?.student) {
-        foundChildren = [fetched.student];
+      if (fetched && 'error' in fetched && fetched.error && !fetched.student) {
+        remoteErrorMsg = fetched.error;
+      } else if (fetched?.student) {
+        foundChildren =
+          fetched.allMatchedStudents && fetched.allMatchedStudents.length > 0
+            ? fetched.allMatchedStudents
+            : [fetched.student];
         remoteSnapshot = fetched;
       }
     }
@@ -208,7 +218,7 @@ export const ParentPortalView: React.FC<ParentPortalViewProps> = ({
     setSearching(false);
 
     if (foundChildren.length === 0) {
-      setLoginError('الرقم مش مسجل، تواصل مع الإدارة');
+      setLoginError(remoteErrorMsg || 'الرقم مش مسجل، تواصل مع الإدارة');
       return;
     }
 

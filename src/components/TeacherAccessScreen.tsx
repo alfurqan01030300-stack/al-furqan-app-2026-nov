@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ArrowRight, GraduationCap, Phone, UserPlus } from 'lucide-react';
 import { AcademyLogo } from './AcademyLogo';
 
@@ -25,6 +25,19 @@ export const TeacherAccessScreen: React.FC<TeacherAccessScreenProps> = ({
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [showRegisterShortcut, setShowRegisterShortcut] = useState(false);
+
+  useEffect(() => {
+    if (initialPhone) {
+      setPhone(initialPhone);
+    }
+  }, [initialPhone]);
+
+  useEffect(() => {
+    if (initialNotice) {
+      setErrorMsg(null);
+      setShowRegisterShortcut(false);
+    }
+  }, [initialNotice]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

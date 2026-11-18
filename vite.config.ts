@@ -127,6 +127,7 @@ export default defineConfig(({ command }) => {
   const buildId = `${appVersion}-${Date.now()}`;
 
   return {
+    envPrefix: ['VITE_', 'NEXT_PUBLIC_'],
     define: {
       __APP_VERSION__: JSON.stringify(appVersion),
       __APP_BUILD_ID__: JSON.stringify(buildId),
