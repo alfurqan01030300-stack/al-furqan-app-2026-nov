@@ -143,11 +143,16 @@ export function getSupabaseClient(): SupabaseClient | null {
                 await new Promise((r) => setTimeout(r, 350));
                 continue;
               }
-              console.warn('[Supabase Fetch] Network failure:', {
-                url: requestUrl,
-                name: err?.name,
-                message: err?.message || String(err),
-              });
+              const isMutation = method !== 'GET' && method !== 'HEAD';
+              (isMutation ? console.error : console.warn)(
+                '[Supabase Fetch] Network failure:',
+                {
+                  method,
+                  url: requestUrl,
+                  name: err?.name,
+                  message: err?.message || String(err),
+                }
+              );
               throw err;
             }
           }

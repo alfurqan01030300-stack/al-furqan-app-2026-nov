@@ -45,21 +45,19 @@ function isNetworkFetchError(err: any): boolean {
 
 export function sanitizeUserFacingError(
   err: unknown,
-  fallback = 'حدث خطأ في الاتصال بالسيرفر، حاول مرة أخرى'
+  fallback = 'تعذر إتمام العملية، يرجى مراجعة رسالة الخطأ في الكونسول.'
 ): string {
   if (!err) return fallback;
-  if (isNetworkFetchError(err)) {
-    return 'حدث خطأ في الاتصال بالسيرفر، حاول مرة أخرى';
-  }
   const msg =
     typeof err === 'string'
       ? err
       : typeof (err as any)?.message === 'string'
       ? (err as any).message
-      : '';
+      : String(err);
   const cleaned = msg.trim();
-  if (!cleaned || /failed to fetch/i.test(cleaned)) {
-    return fallback;
+  if (!cleaned) return fallback;
+  if (isNetworkFetchError(err) && !cleaned.includes('URL:')) {
+    return `${cleaned} (URL: ${SUPABASE_PROJECT_URL || 'غير معرف'})`;
   }
   return cleaned;
 }
@@ -72,6 +70,7 @@ function formatSupabaseError(
   const networkFail = isNetworkFetchError(err);
   const logFn = silentNetworkLog && networkFail ? console.warn : console.error;
   logFn(`[Supabase] Error on table "${tableName}":`, {
+    table: tableName,
     targetUrl: SUPABASE_PROJECT_URL || '(MISSING)',
     code: err?.code,
     status: err?.status,
@@ -80,14 +79,21 @@ function formatSupabaseError(
     hint: err?.hint,
     raw: err,
   });
-  if (networkFail) {
-    return 'حدث خطأ في الاتصال بالسيرفر، حاول مرة أخرى';
-  }
-  const rawMsg = String(err?.message || '').trim();
+
+  const rawMsg = String(err?.message || err || '').trim();
   const details = String(err?.details || '').trim();
   const hint = String(err?.hint || '').trim();
   const code = String(err?.code || '').trim();
-  const fullErrorText = [rawMsg, details, hint].filter(Boolean).join(' — ');
+  const status = err?.status ? `HTTP ${err.status}` : '';
+  const fullErrorText = [status, code ? `code=${code}` : '', rawMsg, details, hint]
+    .filter(Boolean)
+    .join(' — ');
+
+  if (networkFail) {
+    return `خطأ اتصال بجدول (${tableName}): ${rawMsg || 'Failed to fetch'} | URL: ${
+      SUPABASE_PROJECT_URL || '(MISSING)'
+    }`;
+  }
 
   if (code === '42501' || rawMsg.toLowerCase().includes('row-level security')) {
     return `صلاحيات RLS على جدول (${tableName}) تمنع العملية: ${fullErrorText}`;
@@ -95,13 +101,13 @@ function formatSupabaseError(
   if (code === '42P01' || rawMsg.toLowerCase().includes('does not exist')) {
     return `جدول (${tableName}) غير موجود أو تعذر الوصول إليه في Supabase: ${fullErrorText}`;
   }
-  if (code === '42703' || rawMsg.toLowerCase().includes('column')) {
+  if (code === '42703' || code === 'PGRST204' || rawMsg.toLowerCase().includes('column')) {
     return `عدم تطابق أسماء الأعمدة في جدول (${tableName}): ${fullErrorText}`;
   }
   if (code === '23505' || rawMsg.toLowerCase().includes('duplicate')) {
-    return 'رقم الهاتف مسجل بالفعل في قاعدة البيانات.';
+    return `رقم الهاتف مسجل بالفعل في جدول (${tableName}): ${fullErrorText}`;
   }
-  return fullErrorText || `حدث خطأ أثناء الاتصال بجدول (${tableName}) في Supabase.`;
+  return fullErrorText || `حدث خطأ في جدول (${tableName}) في Supabase.`;
 }
 
 function buildPhoneVariants(phone: string): string[] {
